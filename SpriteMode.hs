@@ -19,51 +19,6 @@ type SpriteTool = (BurnSprite -> IO ()) -> IO ()
 -- texture
 -- vbo
 
-{-
-makeSpriteLoader :: Measure -> IO (FilePath -> IO SpriteTool)
-makeSpriteLoader measure = do
-  vao <- newVAO
-  useVAO vao
-
-  let name1 = "basic.vs"
-  let name2 = "basic.fs"
-  code1 <- readFile name1
-  code2 <- readFile name2
-  shader <- newShader name1 code1 name2 code2
-  vbo <- storableVectorToVBO tileData
-  useVBO vbo
-  configAttrib shader "position" 2 16 0 GL_FLOAT
-  configAttrib shader "texcoord" 2 16 8 GL_FLOAT
-  ul0 <- getUniformLocation shader "winWH"
-  ul1 <- getUniformLocation shader "srcXY"
-  ul2 <- getUniformLocation shader "srcWH"
-  ul3 <- getUniformLocation shader "dstXY"
-  ul4 <- getUniformLocation shader "dstWH"
-
-  assertGL "sprite loader maker"
-
-  let legend = UL1 ul0 ul1 ul2 ul3 ul4
-
-  return (loadSheet measure vao vbo shader legend)
-
--- generate and close over texture
-loadSheet :: Measure -> VAO -> VBO -> Shader -> ULegend1 -> FilePath -> IO SpriteTool
-loadSheet measure vao tile shader legend filename = do
-  tex <- readImage filename >>= \x -> case x of
-    Left msg -> putStrLn (filename ++ ": " ++ msg) >> exitFailure
-    Right di -> pictureToTex di
-  assertGL "load image file"
-  useTexture tex
-  return $ \action -> do
-    winDims <- measure
-    useVAO vao
-    useVBO tile
-    useShader shader
-    useTexture tex
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_NEAREST
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_NEAREST
-    action (putSprite winDims legend)
--}
 
 loadBasicTile :: IO VBO
 loadBasicTile = storableVectorToVBO tileData
@@ -81,7 +36,7 @@ loadBasicShader vbo = do
   vao <- newVAO
   useVAO vao
   let name1 = "basic.vs"
-  let name2 = "basic.fs"
+  let name2 = "sprite.fs"
   code1 <- readFile name1
   code2 <- readFile name2
   shader <- newShader name1 code1 name2 code2

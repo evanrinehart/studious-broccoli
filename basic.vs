@@ -9,8 +9,10 @@ uniform vec2 dstWH;
 
 out vec2 uv;
 
-// place a tile centered at xy
-// 0,0 is bottom left
+// place a tile *centered* at xy
+// 0,0 is bottom left of the screen
+// xy spans ranges [0,0] x [winw, winh]
+// assumes a tile spanning [-1,1] x [-1,1] is given
 
 void main()
 {
@@ -26,5 +28,3 @@ void main()
     gl_Position.y = position.y * h / winh + dy;
     uv = texcoord;
 }
-
-

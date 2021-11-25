@@ -28,7 +28,7 @@ void main() {
   float width  = float(sheetWH.x);
   float height = float(sheetWH.y);
   float x = uv.x / width  * srcWH.x + (srcXY.x) / width;
-  float y = (1 - uv.y) / height * srcWH.y + (srcXY.y) / height;
+  float y = (1-uv.y) / height * srcWH.y + (srcXY.y) / height;
   //vec2 shift = vec2(11,4);
   vec4 c = texture(sheet, vec2(x,y));
   if(c.r == 1 && c.g == 1 && c.b == 1){

@@ -1,6 +1,6 @@
 module Common where
 
-import Data.Vector.Storable as V
+import Data.Vector.Storable as V (Vector, fromList)
 import Graphics.GL
 
 newtype Glyph = Glyph Int
@@ -8,16 +8,15 @@ newtype Glyph = Glyph Int
 fi :: (Integral a, Num b) => a -> b
 fi = fromIntegral
 
-{-  01(-1, 1)   11(1, 1)
- -  00(-1,-1)   10(1,-1)  -}
+{-  a01(-1, 1)   b11(1, 1)
+ -  c00(-1,-1)   d10(1,-1)  -}
 tileData :: Vector Float
-tileData = V.fromList
-  [-1, -1, 0, 0
-  , 1, -1, 1, 0
-  , 1,  1, 1, 1
-  , 1,  1, 1, 1
-  ,-1,  1, 0, 1
-  ,-1, -1, 0, 0]
+tileData =
+  let a = [-1,  1, 0, 1] in
+  let b = [ 1,  1, 1, 1] in
+  let c = [-1, -1, 0, 0] in
+  let d = [ 1, -1, 1, 0] in
+  V.fromList (concat [c,d,b,b,a,c])
 
 data ULegend1 = UL1
   { ul1WinWH :: GLint

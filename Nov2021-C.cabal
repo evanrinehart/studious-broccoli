@@ -21,6 +21,7 @@ executable Nov2021-C
   other-modules:       Console, Buffer2D, Glue, Ticks, SpriteMode,
                        TextMode, Common
   -- other-extensions:
-  build-depends:       base < 5, GLFW-b, gl, vector, JuicyPixels, containers, random, clock
+  build-depends:       base < 5, GLFW-b, gl, vector, JuicyPixels, containers,
+                       random, clock
   -- hs-source-dirs:
   default-language:    Haskell2010

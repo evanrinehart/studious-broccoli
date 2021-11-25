@@ -13,6 +13,8 @@ import Text.Printf
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Data.IntMap as IM
 
+import Graphics.GL
+
 import Common
 import Glue
 import TextMode
@@ -86,26 +88,27 @@ forgeAppKit win events = do
   basic3 <- loadBasicShader vbo
   sheet <- loadTextureFromFile "dungeon.png"
   let useDungeon = newSpriteTool getWindowDims sheet vbo basic3
-  let (shader,vao,legend) = basic3
 
-  font3 <- loadFontShader vbo
+  font3 <- loadGlyphShader vbo
   font <- loadTextureFromFile "cozette.png"
   (fbo,surf) <- newTextSurface
   let useText = newTextTool vbo font font3 fbo
   
-  let awYeah = slap vbo vao shader legend surf (F2 0 0)
+  (v1,s1,l1) <- loadStraightShader vbo
+  
+  let awYeah = slap vbo v1 s1 l1 surf (F2 0 0)
 
   useText $ \burn -> do
-    burn (Glyph 37) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 0
+    burn (Glyph 32) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 0
     burn (Glyph 33) (F3 0.9 0.9 0.9) (F3 0 0 0) 1 0
     burn (Glyph 34) (F3 0.9 0.9 0.9) (F3 0 0 0) 2 0
     burn (Glyph 35) (F3 0.9 0.9 0.9) (F3 0 0 0) 3 0
-    burn (Glyph 36) (F3 0.9 0.9 0.9) (F3 0 0 0) 4 0
-    burn (Glyph 32) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 1
-    burn (Glyph 33) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 2
-    burn (Glyph 34) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 3
-    burn (Glyph 35) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 4
-    burn (Glyph 36) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 5
+    burn (Glyph 36) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 1
+    burn (Glyph 37) (F3 0.9 0.9 0.9) (F3 0 0 0) 1 1
+    burn (Glyph 38) (F3 0.9 0.9 0.9) (F3 0 0 0) 2 1
+    burn (Glyph 39) (F3 0.9 0.9 0.9) (F3 0 0 0) 3 1
+    burn (Glyph 40) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 2
+    burn (Glyph 41) (F3 0.9 0.9 0.9) (F3 0 0 0) 1 2
 
 
   Just t <- GLFW.getTime
@@ -145,39 +148,6 @@ pc2View = (\x -> 10000 - x) . (*10000) . avg . map (\x -> x / 16.666) where
 
 ffloor :: Double -> Double
 ffloor x = fi (floor x :: Int)
-
-{-
-regen console = do
-  let locs = [(i,j) | j <- [0..46], i <- [0..57]]
-  codes <- forM locs $ \(i,j) -> do
-    c <- randomRIO (0,60)
-    return (Code c, i, j)
-  return (burns codes console)
--}
-
-bricks  = (8,3)
-orb     = (1,8)
-monster = (11,3)
-ogre    = (5,11)
-knight  = (5,7)
-
-{-
-corn :: (Int,Int) -> Float -> Float -> Blit
-corn (i,j) x y = Blit (Rect sx sy 32 32) (Rect x y 32 32) where
-  sx = fi i * 32
-  sy = fi j * 32
--}
-
-to :: Float -> Float -> Rect Float
-to x y = Rect dx dy w w where
-  dx = x - w/2
-  dy = y - w/2
-  w = 32
-
-from :: (Int,Int) -> Rect Float
-from (i,j) = (Rect sx sy 32 32) where
-  sx = fi i * 32
-  sy = fi j * 32
 
 -- time notes
 -- need frame delta for 'bogofps' percent (need Q, need prev time)
@@ -241,3 +211,25 @@ mainLoop win kit = do
   GLFW.windowShouldClose win >>= \b -> case b of
     False -> mainLoop win kit
     True  -> return ()
+
+
+
+
+-- misc
+bricks  = (8,3)
+orb     = (1,8)
+monster = (11,3)
+ogre    = (5,11)
+knight  = (5,7)
+
+to :: Float -> Float -> Rect Float
+to x y = Rect dx dy w w where
+  dx = x - w/2
+  dy = y - w/2
+  w = 32
+
+from :: (Int,Int) -> Rect Float
+from (i,j) = (Rect sx sy 32 32) where
+  sx = fi i * 32
+  sy = fi j * 32
+

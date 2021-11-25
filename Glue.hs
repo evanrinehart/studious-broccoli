@@ -113,16 +113,17 @@ useShader (Shader i) = glUseProgram i
 
 -- Texture
 pictureToTex :: DynamicImage -> IO Tex
-pictureToTex di = case di of
-  ImageRGBA8 (Image w h d) -> V.unsafeWith d $ \ptr -> do
-    putStrLn "RGBA8 image"
-    newTexture GL_RGBA ptr w h
-  ImageRGB8  (Image w h d) -> V.unsafeWith d $ \ptr -> do
-    putStrLn "RGB8 image"
-    newTexture GL_RGB ptr w h
-  _ -> do
-    putStrLn "unsupported format"
-    exitFailure
+pictureToTex di = action where
+  action = case di of
+    ImageRGBA8 (Image w h pixVec) -> do
+      V.unsafeWith pixVec $ \ptr -> do
+        newTexture GL_RGBA ptr w h
+    ImageRGB8 (Image w h pixVec) -> do
+      V.unsafeWith pixVec $ \ptr -> do
+        newTexture GL_RGB ptr w h
+    _ -> do
+      putStrLn "unsupported format"
+      exitFailure
 
 newTexture :: GLenum -> Ptr Word8 -> Int -> Int -> IO Tex
 newTexture format ptr w h = do

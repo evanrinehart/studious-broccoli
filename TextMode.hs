@@ -15,7 +15,7 @@ type BurnGlyph = Glyph -> Float3 -> Float3 -> Int -> Int -> IO ()
 type TextTool = (BurnGlyph -> IO ()) -> IO ()
 
 data ULegend2 = UL2
-  { ul2WinWH :: GLint
+  { ul2SurfWH :: GLint
   , ul2SrcXY :: GLint
   , ul2SrcWH :: GLint
   , ul2DstXY :: GLint
@@ -36,10 +36,32 @@ glyphDst i j = Rect (fi x) (fi y) (fi w) (fi h) where
   w = 7
   h = 13
   x = i * w
-  y = j * h
+  y = 600 - (j + 1) * h
 
-loadFontShader :: VBO -> IO (VAO,Shader,ULegend2)
-loadFontShader vbo = do
+loadStraightShader :: VBO -> IO (VAO,Shader,ULegend1)
+loadStraightShader vbo = do
+  vao <- newVAO
+  useVAO vao
+
+  useVBO vbo
+
+  let name1 = "basic.vs"
+  let name2 = "basic.fs"
+  code1 <- readFile name1
+  code2 <- readFile name2
+  shader <- newShader name1 code1 name2 code2
+  configAttrib shader "position" 2 16 0 GL_FLOAT
+  configAttrib shader "texcoord" 2 16 8 GL_FLOAT
+  ul0 <- getUniformLocation shader "winWH"
+  ul1 <- getUniformLocation shader "srcXY"
+  ul2 <- getUniformLocation shader "srcWH"
+  ul3 <- getUniformLocation shader "dstXY"
+  ul4 <- getUniformLocation shader "dstWH"
+
+  return (vao, shader, UL1 ul0 ul1 ul2 ul3 ul4)
+
+loadGlyphShader :: VBO -> IO (VAO,Shader,ULegend2)
+loadGlyphShader vbo = do
   vao <- newVAO
   useVAO vao
 
@@ -52,7 +74,7 @@ loadFontShader vbo = do
   shader <- newShader name1 code1 name2 code2
   configAttrib shader "position" 2 16 0 GL_FLOAT
   configAttrib shader "texcoord" 2 16 8 GL_FLOAT
-  ul0 <- getUniformLocation shader "winWH"
+  ul0 <- getUniformLocation shader "surfWH"
   ul1 <- getUniformLocation shader "srcXY"
   ul2 <- getUniformLocation shader "srcWH"
   ul3 <- getUniformLocation shader "dstXY"
@@ -68,7 +90,7 @@ loadFontShader vbo = do
 newTextSurface :: IO (FBO,Tex)
 newTextSurface = do
   let w = 256
-  let h = 256
+  let h = 600
   fbo <- newFBO
   useFBO fbo
   surf <- newBlankTexture w h
@@ -92,7 +114,9 @@ newTextTool vbo tex (vao,shader,legend) fbo action = do
   glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_NEAREST
   glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_NEAREST
   useFBO fbo
-  action (putGlyph legend (F2 400 600))
+  glViewport 0 0 256 600
+  action (putGlyph legend (F2 256 600))
+  glViewport 0 0 800 600
   useFBO (FBO 0)
   assertGL "yoooo"
 
@@ -102,7 +126,7 @@ putGlyph ul (F2 surfW surfH) (Glyph c) fg bg i j = do
   let F3 r2 g2 b2 = bg
   let Rect sx sy sw sh = glyphSrc c
   let Rect dx dy dw dh = glyphDst i j
-  setUniform2f (ul2WinWH ul) surfW surfH
+  setUniform2f (ul2SurfWH ul) surfW surfH
   setUniform2f (ul2SrcXY ul) sx sy
   setUniform2f (ul2SrcWH ul) sw sh
   setUniform2f (ul2DstXY ul) dx dy
@@ -119,7 +143,7 @@ slap vbo vao shader ul tex (F2 x y) = do
   useTexture tex
   setUniform2f (ul1WinWH ul) 800 600
   setUniform2f (ul1SrcXY ul) 0 0
-  setUniform2f (ul1SrcWH ul) 256 256
-  setUniform2f (ul1DstXY ul) 128 128
-  setUniform2f (ul1DstWH ul) 256 256
+  setUniform2f (ul1SrcWH ul) 256 600 -- 256 600 and 800 are magic, fix
+  setUniform2f (ul1DstXY ul) 128 300
+  setUniform2f (ul1DstWH ul) 256 600
   renderQuad
