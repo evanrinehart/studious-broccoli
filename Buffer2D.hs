@@ -3,7 +3,7 @@ module Buffer2D where
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IM
 
-data Rect a = Rect a a a a
+data Rect a = Rect !a !a !a !a
 
 type Buffer2D a = (a, IntMap (IntMap a))
 blank :: a -> Buffer2D a

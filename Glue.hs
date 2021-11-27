@@ -16,11 +16,6 @@ import Codec.Picture
 
 import Common
 
-data Float2 = F2 !Float !Float
-data Float3 = F3 !Float !Float !Float
-data Rect a = Rect !a !a !a !a
-type RGB = Float3
-
 newtype VAO = VAO GLuint
 newtype VBO = VBO GLuint
 newtype Shader = Shader GLuint
@@ -175,6 +170,12 @@ attachTex (Tex i) =
   glFramebufferTexture2D GL_FRAMEBUFFER GL_COLOR_ATTACHMENT0 GL_TEXTURE_2D i 0
 
 -- attribs and uniforms
+-- p - shader
+-- name - attrib name
+-- components - n components
+-- stride - bytes per vertex
+-- offset - byte offset of this attrib
+-- dataType - type of component (int, float, etc)
 configAttrib :: Shader -> String -> Int -> Int -> Int -> GLenum -> IO ()
 configAttrib (Shader p) name components stride offset dataType = do
   attrib <- withCString name $ \ptr -> glGetAttribLocation p (castPtr ptr)

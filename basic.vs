@@ -1,7 +1,6 @@
 #version 150
 
 in vec2 position;
-in vec2 texcoord;
 
 uniform vec2 winWH;
 uniform vec2 dstXY;
@@ -22,9 +21,9 @@ void main()
     float winh = winWH.y;
     float w = dstWH.x;
     float h = dstWH.y;
-    float dx = dstXY.x / (winw / 2) - 1;
-    float dy = dstXY.y / (winh / 2) - 1;
-    gl_Position.x = position.x * w / winw + dx;
-    gl_Position.y = position.y * h / winh + dy;
-    uv = texcoord;
+    float dx = dstXY.x * 2 / winw;
+    float dy = dstXY.y * 2 / winh;
+    gl_Position.x = position.x * 2 / winw * w - 1 + dx;
+    gl_Position.y = position.y * 2 / winh * h - 1 + dy;
+    uv = position;
 }

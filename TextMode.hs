@@ -36,7 +36,7 @@ glyphDst i j = Rect (fi x) (fi y) (fi w) (fi h) where
   w = 7
   h = 13
   x = i * w
-  y = 600 - (j + 1) * h
+  y = magicH - (j + 1) * h
 
 loadStraightShader :: VBO -> IO (VAO,Shader,ULegend1)
 loadStraightShader vbo = do
@@ -50,8 +50,7 @@ loadStraightShader vbo = do
   code1 <- readFile name1
   code2 <- readFile name2
   shader <- newShader name1 code1 name2 code2
-  configAttrib shader "position" 2 16 0 GL_FLOAT
-  configAttrib shader "texcoord" 2 16 8 GL_FLOAT
+  configAttrib shader "position" 2 8 0 GL_FLOAT
   ul0 <- getUniformLocation shader "winWH"
   ul1 <- getUniformLocation shader "srcXY"
   ul2 <- getUniformLocation shader "srcWH"
@@ -67,14 +66,13 @@ loadGlyphShader vbo = do
 
   useVBO vbo
 
-  let name1 = "font.vs"
+  let name1 = "basic.vs"
   let name2 = "glyph.fs"
   code1 <- readFile name1
   code2 <- readFile name2
   shader <- newShader name1 code1 name2 code2
-  configAttrib shader "position" 2 16 0 GL_FLOAT
-  configAttrib shader "texcoord" 2 16 8 GL_FLOAT
-  ul0 <- getUniformLocation shader "surfWH"
+  configAttrib shader "position" 2 8 0 GL_FLOAT
+  ul0 <- getUniformLocation shader "winWH"
   ul1 <- getUniformLocation shader "srcXY"
   ul2 <- getUniformLocation shader "srcWH"
   ul3 <- getUniformLocation shader "dstXY"
@@ -89,8 +87,8 @@ loadGlyphShader vbo = do
 
 newTextSurface :: IO (FBO,Tex)
 newTextSurface = do
-  let w = 256
-  let h = 600
+  let w = magicW
+  let h = magicH
   fbo <- newFBO
   useFBO fbo
   surf <- newBlankTexture w h
@@ -114,8 +112,8 @@ newTextTool vbo tex (vao,shader,legend) fbo action = do
   glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_NEAREST
   glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_NEAREST
   useFBO fbo
-  glViewport 0 0 256 600
-  action (putGlyph legend (F2 256 600))
+  glViewport 0 0 magicW magicH
+  action (putGlyph legend (F2 magicW magicH))
   glViewport 0 0 800 600
   useFBO (FBO 0)
   assertGL "yoooo"
@@ -135,15 +133,24 @@ putGlyph ul (F2 surfW surfH) (Glyph c) fg bg i j = do
   setUniform3f (ul2BG ul) r2 g2 b2
   renderQuad
 
-slap :: VBO -> VAO -> Shader -> ULegend1 -> Tex -> Float2 -> IO ()
-slap vbo vao shader ul tex (F2 x y) = do
+slap :: VBO -> VAO -> Shader -> ULegend1 -> Rect Float -> Tex -> IO ()
+slap vbo vao shader ul (Rect x y w h) tex = do
   useVAO vao
   useVBO vbo
   useShader shader
   useTexture tex
   setUniform2f (ul1WinWH ul) 800 600
   setUniform2f (ul1SrcXY ul) 0 0
-  setUniform2f (ul1SrcWH ul) 256 600 -- 256 600 and 800 are magic, fix
-  setUniform2f (ul1DstXY ul) 128 300
-  setUniform2f (ul1DstWH ul) 256 600
+  setUniform2f (ul1SrcWH ul) w h
+  setUniform2f (ul1DstXY ul) x y
+  setUniform2f (ul1DstWH ul) w h
   renderQuad
+
+
+
+
+magicW :: Num a => a
+magicW = 400
+
+magicH :: Num a => a
+magicH = 600

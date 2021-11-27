@@ -41,8 +41,7 @@ loadBasicShader vbo = do
   code2 <- readFile name2
   shader <- newShader name1 code1 name2 code2
   useVBO vbo
-  configAttrib shader "position" 2 16 0 GL_FLOAT
-  configAttrib shader "texcoord" 2 16 8 GL_FLOAT
+  configAttrib shader "position" 2 8 0 GL_FLOAT
   ul0 <- getUniformLocation shader "winWH"
   ul1 <- getUniformLocation shader "srcXY"
   ul2 <- getUniformLocation shader "srcWH"

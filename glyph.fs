@@ -10,8 +10,6 @@ uniform vec2 srcWH;
 uniform vec3 fgColor;
 uniform vec3 bgColor;
 
-in vec2 xy;
-
 /* uv
 01  11
 
@@ -21,10 +19,6 @@ in vec2 xy;
 
 void main() {
   ivec2 sheetWH = textureSize(sheet, 0);
-  //outColor = texture(sheet, uv);
-  //outColor.r = uv.x;
-  //outColor.g = uv.y;
-  //outColor.b = 0;
   float width  = float(sheetWH.x);
   float height = float(sheetWH.y);
   float x = uv.x / width  * srcWH.x + (srcXY.x) / width;

@@ -3,7 +3,7 @@ module Console where
 import Control.Monad (void)
 import Buffer2D
 
-import Common
+import Common hiding (Rect)
 
 type Frame = Rect Int
 

@@ -10,3 +10,6 @@ data Event
   | MouseMotion Float Float
   | Scroll Float Float
       deriving Show
+
+-- if the event has coordinates, move by some shift
+-- shiftEvent :: Float2 -> Event -> Event

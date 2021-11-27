@@ -1,5 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE BlockArguments #-}
 module Main where
 
 import System.Exit
@@ -9,6 +10,7 @@ import Data.Foldable
 import System.Random
 import Numeric
 import Text.Printf
+import Data.Char
 
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Data.IntMap as IM
@@ -23,6 +25,9 @@ import Console
 --import DebugPanel
 import Event
 import Ticks
+
+import MiniApp
+import TheThing
 
 main :: IO ()
 main = do
@@ -68,17 +73,6 @@ main = do
   mainLoop win kit
   GLFW.terminate
 
-data AppKit = AppKit
-  { appWin         :: GLFW.Window
-  , appTakeEvents  :: IO [Event]
-  , appDungeon     :: SpriteTool
-  , appSlap        :: IO ()
-  , appVarPrev     :: IORef Double
-  , appGetTick     :: IO Int
-  , appPC1         :: Double -> IO Double
-  , appPC2         :: Double -> IO Double
-  , appVarCC       :: IORef Int }
-
 forgeAppKit :: GLFW.Window -> IORef [Event] -> IO AppKit
 forgeAppKit win events = do
 
@@ -92,13 +86,16 @@ forgeAppKit win events = do
   font3 <- loadGlyphShader vbo
   font <- loadTextureFromFile "cozette.png"
   (fbo,surf) <- newTextSurface
-  let useText = newTextTool vbo font font3 fbo
+  let textTool = newTextTool vbo font font3 fbo
   
   (v1,s1,l1) <- loadStraightShader vbo
   
-  let awYeah = slap vbo v1 s1 l1 surf (F2 0 0)
+  let awYeah dst tex = slap vbo v1 s1 l1 dst tex 
 
-  useText $ \burn -> do
+  let offwhite  = (F3 0.9 0.9 0.9)
+  let black     = (F3 0 0 0)
+
+  textTool \burn -> do
     burn (Glyph 32) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 0
     burn (Glyph 33) (F3 0.9 0.9 0.9) (F3 0 0 0) 1 0
     burn (Glyph 34) (F3 0.9 0.9 0.9) (F3 0 0 0) 2 0
@@ -110,27 +107,51 @@ forgeAppKit win events = do
     burn (Glyph 40) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 2
     burn (Glyph 41) (F3 0.9 0.9 0.9) (F3 0 0 0) 1 2
 
-
   Just t <- GLFW.getTime
   prev <- newIORef t
 
   getTick <- newTicker
+  oldTick <- newIORef 0
 
   pc1 <- newPerformanceComputer pc1View
   pc2 <- newPerformanceComputer pc2View
 
   cc <- newIORef 0
 
+  thing <- makeTheThing textTool
+
   return $ AppKit
     { appWin = win
+    , appQuit = GLFW.setWindowShouldClose win True
     , appTakeEvents = atomicModifyIORef events (\es -> ([], es))
     , appDungeon = useDungeon
+    , appText = textTool
     , appSlap = awYeah
     , appVarPrev = prev
     , appGetTick = getTick
+    , appOldTick = oldTick
     , appPC1 = pc1
     , appPC2 = pc2
+    , appThing = thing
+    , appMinis = [(Rect 0 0 400 600, surf, thing)]
     , appVarCC = cc }
+
+data AppKit = AppKit
+  { appWin         :: GLFW.Window
+  , appQuit        :: IO ()
+  , appTakeEvents  :: IO [Event]
+  , appDungeon     :: SpriteTool
+  , appText        :: TextTool
+  , appSlap        :: Rect Float -> Tex -> IO ()
+  , appVarPrev     :: IORef Double
+  , appGetTick     :: IO Int
+  , appOldTick     :: IORef Int
+  , appPC1         :: Double -> IO Double
+  , appPC2         :: Double -> IO Double
+  , appVarCC       :: IORef Int
+  , appThing       :: MiniApp
+  , appMinis       :: [(Rect Float, Tex, MiniApp)] }
+
 
 -- for the interframe delta where less than 33ms is interpreted as a hit
 pc1View :: [Double] -> Double
@@ -154,20 +175,42 @@ ffloor x = fi (floor x :: Int)
 -- need update duration for frame score (100 * (16.666 / dur)) (need Q)
 -- need game step counter for fixed time update speed
 
+mainLoop :: GLFW.Window -> AppKit -> IO ()
 mainLoop win kit = do
-  -- pump the event handlers (and windowing system)
-  ((), renderTime) <- stopwatch $ do
+
+  let var = appOldTick kit
+  that <- readIORef var
+  this <- appGetTick kit
+  let n = this - that
+  writeIORef var this
+
+  -- { begin timed section
+  ((), intraFrameTime) <- stopwatch $ do
+
+    -- pump the event handlers (and windowing system)
     GLFW.pollEvents
     es <- appTakeEvents kit
-    --when (not (null es)) (putStrLn (show (length es) ++ " events"))
-    --when (not (null es)) $ print es
 
+    forM_ [(m,e)|e<-es,m<-appMinis kit] $ \((_, _, mini),e) -> maPoke mini e
+
+    forM_ es $ \e -> case e of
+      Keyboard GLFW.Key'Escape _ _ -> appQuit kit
+      _ -> return ()
+
+
+    -- time passes for animating subprocess
+    forM_ (appMinis kit) $ \(_, _, mini) -> maTime mini n
+
+
+    -- render orbitting sprites and the console
     Just t <- fmap (fmap realToFrac) GLFW.getTime
     let d = 2 * pi / 5
 
-  -- paint all the graphics
+    forM_ (appMinis kit) $ \(_, _, mini) -> maShow mini
+
     clearColorBuffer
 
+    -- some sprites
     appDungeon kit $ \brush -> do
       let f s phi = let x=64*sin phi + 600; y=64*cos phi+300 in brush (from s) (to x y)
       f bricks t
@@ -176,37 +219,27 @@ mainLoop win kit = do
       f ogre (t + 3*d)
       f knight (t + 4*d)
 
-    appSlap kit
+    -- display all miniapp panes
+    forM_ (appMinis kit) $ \(dst, tex, _) -> appSlap kit dst tex
+  -- end timed section }
 
-    --appUseTextSurface kit $ \burn -> do
-      --burn (Glyph 33) (F3 1 1 1) (F3 0 0 0) 0 0
-      --let putC c i j = brush (Glyph c (i * 7 + 1) (j * 13 + 1) (F3 0.9 0.9 0.9) (F3 0 0 0))
-      --forM_ [(i,j)|j<-[0..45], i<-[0..113]] $ \(i,j) -> do
-      --  c <- randomRIO (33,99)
-      --  putC (Code c) i j
-      --forM_ (IM.toList console) $ \(_,(c,i,j)) -> putC c i j
-      --Console.eachCell (dpConsole dpanel) $ \i j c -> putC c i j
-      --return ()
-    -- end paint section
-    return ()
-
-
-
-  -- compute interframe delta to get performance %
+  -- performance computations
   prev <- readIORef (appVarPrev kit)
   Just now <- GLFW.getTime
   let interFrameDelta = 1000 * (now - prev)
   writeIORef (appVarPrev kit) now
   percent <- appPC1 kit interFrameDelta
-  rt <- appPC2 kit renderTime
+  rt <- appPC2 kit intraFrameTime
 
+  -- temporary, print out performance every 30 frames
   let ref = appVarCC kit
   i <- readIORef ref
-  when (i `mod` 30 == 0) $ do
+  when (i `mod` 60 == 0) $ do
     putStr (printf "%05.1f" percent ++ "%")
     putStrLn (" (" ++ printf "%04d" (max 0 (floor rt :: Int)) ++ ")")
   writeIORef ref (i+1)
 
+  -- show graphics / sleep
   GLFW.swapBuffers win
   GLFW.windowShouldClose win >>= \b -> case b of
     False -> mainLoop win kit
@@ -233,3 +266,14 @@ from (i,j) = (Rect sx sy 32 32) where
   sx = fi i * 32
   sy = fi j * 32
 
+
+
+basicMiniApp :: MiniApp
+basicMiniApp = this where
+  f e = print e
+  g n = putStrLn ("time + " ++ show n)
+  h = putStrLn "repaint"
+  this = MiniApp
+    { maPoke = f
+    , maTime = g
+    , maShow = h }
