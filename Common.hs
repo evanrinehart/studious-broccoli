@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 module Common where
 
 import Data.Vector.Storable as V (Vector, fromList)
@@ -28,9 +29,19 @@ tileData =
   let d = [1, 0] in
   V.fromList (concat [c,d,b,b,a,c])
 
+{-
 data ULegend1 = UL1
   { ul1WinWH :: GLint
   , ul1SrcXY :: GLint
   , ul1SrcWH :: GLint
   , ul1DstXY :: GLint
   , ul1DstWH :: GLint }
+-}
+
+type UL1 =
+  ['("winWH", Float2)
+  ,'("srcXY", Float2)
+  ,'("srcWH", Float2)
+  ,'("dstXY", Float2)
+  ,'("dstWH", Float2)]
+

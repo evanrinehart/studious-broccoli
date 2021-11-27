@@ -25,6 +25,7 @@ import Console
 --import DebugPanel
 import Event
 import Ticks
+import Paint
 
 import MiniApp
 import TheThing
@@ -88,7 +89,7 @@ forgeAppKit win events = do
   (fbo,surf) <- newTextSurface
   let textTool = newTextTool vbo font font3 fbo
   
-  (v1,s1,l1) <- loadStraightShader vbo
+  Paint v1 s1 l1 <- loadStraightShader vbo
   
   let awYeah dst tex = slap vbo v1 s1 l1 dst tex 
 

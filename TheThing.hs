@@ -17,7 +17,7 @@ makeTheThing tool = do
   return (theThing tool ref)
 
 theThing :: TextTool -> IORef [Char] -> MiniApp
-theThing tool ref = MiniApp {maPoke, maShow} where
+theThing tool ref = MiniApp {maPoke, maShow, maTime} where
 
   maPoke (Typing c) = modifyIORef ref (c:)
   maPoke _          = return ()
@@ -27,4 +27,4 @@ theThing tool ref = MiniApp {maPoke, maShow} where
     forM_ (zip s [0..]) $ \(c,i) -> do
       burn (Glyph (ord c - 33)) yellow red i 0
 
-  --maTime _ = return ()
+  maTime _ = return ()

@@ -25,8 +25,8 @@ import Common
 data Paint rs = Paint VAO Shader (Gate rs)
 
 -- set the uniforms associated with the paint
-configPaint :: Paint rs -> Rec rs -> IO ()
-configPaint (Paint _ _ gate) key = unlock gate {- with -} key
+configUniforms :: Gate rs -> Rec rs -> IO ()
+configUniforms = unlock
 
 -- initialize paint by getting uniform locations
 buildGate :: Shader -> RecF Frame ps -> IO (Gate ps)
@@ -62,17 +62,11 @@ unlock (Gate g) k =
 
 
 -- test examples
+{-
 ex :: Shader -> IO (Gate UL1)
 ex sh = buildGate sh (stones capstone) where
   stones = ug2f . ug2f . ug2f . ug2f . ug2f
-
-type UL1 =
-  ['("winWH", Float2)
-  ,'("srcXY", Float2)
-  ,'("srcWH", Float2)
-  ,'("dstXY", Float2)
-  ,'("dstWH", Float2)]
-
+-}
 type L = ['("numberA", Int), '("numberB", Int), '("numberC", Int)]
 {- ... -}
 numbers :: Rec L
