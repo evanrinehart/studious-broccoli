@@ -22,6 +22,8 @@ newtype Shader = Shader GLuint
 newtype Tex = Tex GLuint
 newtype FBO = FBO GLuint
 
+newtype UL = UL GLint -- uniform location
+
 -- VAO
 newVAO :: IO VAO
 newVAO = do

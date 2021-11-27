@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module Paint where
 
 import Data.Functor.Const
@@ -11,76 +11,74 @@ import Data.Proxy
 
 import Control.Monad.Reader
 
+import HList
 import Glue
 import Common
 
-import HList
+-- A combination of VAO, shader, and uniform locations.
+-- The uniform locations takes the form of an IO action
+-- that requires a Rec of new uniform values to set.
 
-data Paint u = Paint VAO Shader u
+-- use buildGate to create a new gate
+-- use >: to build keys
+-- type synonyms to describe the uniforms are like type P1 = [("var1",Float2)]
+data Paint rs = Paint VAO Shader (Gate rs)
+
+-- set the uniforms associated with the paint
+configPaint :: Paint rs -> Rec rs -> IO ()
+configPaint (Paint _ _ gate) key = unlock gate {- with -} key
+
+-- initialize paint by getting uniform locations
+buildGate :: Shader -> RecF Frame ps -> IO (Gate ps)
+buildGate shader = fmap Gate . rMapWithNamesM g where
+  g name (Frame setter) = do
+    ul <- fmap UL $ getUniformLocation shader name
+    return (Func (setter ul))
+
+-- building blocks for buildGate
+ug2f :: KnownSymbol n => RecF Frame ps -> RecF Frame ('(n,Float2) : ps)
+ug2f next = (\(UL i) (F2 x y) -> setUniform2f i x y) `frame` next
+
+ug3f :: KnownSymbol n => RecF Frame ps -> RecF Frame ('(n,Float3) : ps)
+ug3f next = (\(UL i) (F3 x y z) -> setUniform3f i x y z) `frame` next
+
+capstone :: RecF Frame '[]
+capstone = R0
 
 
-{-
-newtype Key ts  = Key  (HList Identity ts)
-newtype Gate ts = Gate (HList Eater ts)
+-- internal stuff
+type Eater = Func (IO ())
+newtype Frame a = Frame (UL -> a -> IO ())
+newtype Gate rs = Gate (RecF Eater rs)
 
-unlock :: Gate ts -> Key ts -> IO ()
-unlock (Gate g) (Key k) =
-  let noop = return ()
-  in hFold (\(Const io) io' -> io >> io') noop (hApply g k)
+frame :: KnownSymbol n => (UL -> a -> IO ()) -> RecF Frame ps -> RecF Frame ('(n,a) : ps)
+frame act next = R1 (Frame act) next
 
-configPaint :: HList Identity ts -> Paint ts -> IO ()
-configPaint xs (Paint _ _ gate) = unlock gate (Key xs)
-
-key :: t -> HList Identity ts -> HList Identity (t ': ts)
-key x next = Identity x `H1` next
-
-buildGate :: (t -> IO ()) -> HList Eater ts -> HList Eater (t ': ts)
-buildGate action next = H1 (Func action) next
-
-bg2f :: String -> HList Eater ts -> ReaderT Shader IO (HList Eater (Float2 ': ts))
-bg2f name next = do
-  shader <- ask
-  ul <- liftIO $ getUniformLocation shader name
-  return $ Func (\(F2 x y) -> setUniform2f ul x y) `H1` next
--}
-
-{-
-bg3f name next = do
-  shader <- ask
-  ul <- getUniformLocation shader name
-  return $ buildGate (\(F3 x y z) -> setUniform3f ul x y z) next
--}
-
-newtype Gate ns ts = Gate (Rec (Func (IO ())) ns ts)
-newtype Key ns ts = Key (Rec Identity ns ts)
-
-type G1 = Gate
-  ["winWH", "srcXY", "srcWH", "dstXY", "dstWH"]
-  [Float2,   Float2,  Float2,  Float2,  Float2]
-
-ex :: Shader -> IO G1
-ex shader = 
-  let capstone = Gate R0 in
-  bgr2f shader capstone >>= bgr2f shader >>= bgr2f shader >>= bgr2f shader >>= bgr2f shader
-
-bgr2f :: forall n ns ts . KnownSymbol n => Shader -> Gate ns ts -> IO (Gate (n : ns) (Float2 : ts))
-bgr2f shader (Gate next) = do
-  let name = symbolVal (Proxy :: Proxy n)
-  ul <- getUniformLocation shader name
-  (return . Gate) (Func (\(F2 x y) -> setUniform2f ul x y) `R1` next)
-
-bgr3f :: forall n ns ts . KnownSymbol n => Shader -> Gate ns ts -> IO (Gate (n : ns) (Float3 : ts))
-bgr3f shader (Gate next) = do
-  let name = symbolVal (Proxy :: Proxy n)
-  ul <- getUniformLocation shader name
-  (return . Gate) (Func (\(F3 x y z) -> setUniform3f ul x y z) `R1` next)
-  
-key :: forall n t ns ts . KnownSymbol n => t -> Key ns ts -> Key (n : ns) (t : ts)
-key x (Key next) = Key (Identity x `R1` next)
-
-unlock :: Gate ns ts -> Key ns ts -> IO ()
-unlock (Gate g) (Key k) = 
+unlock :: Gate rs -> Rec rs -> IO ()
+unlock (Gate g) k = 
   let noop = return ()
   in rFold (\(Const io) io' -> io >> io') noop (rApply g k)
 
+
+
+-- test examples
+ex :: Shader -> IO (Gate UL1)
+ex sh = buildGate sh (stones capstone) where
+  stones = ug2f . ug2f . ug2f . ug2f . ug2f
+
+type UL1 =
+  ['("winWH", Float2)
+  ,'("srcXY", Float2)
+  ,'("srcWH", Float2)
+  ,'("dstXY", Float2)
+  ,'("dstWH", Float2)]
+
+type L = ['("numberA", Int), '("numberB", Int), '("numberC", Int)]
+{- ... -}
+numbers :: Rec L
+numbers =
+  Field @"numberA" 3 >:
+  Field @"numberB" 4 >:
+  Field @"numberC" 999 >:
+  R0
 
