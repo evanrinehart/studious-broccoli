@@ -20,10 +20,11 @@ data RecF :: (* -> *) -> [(Symbol,*)] -> * where
 
 type Rec = RecF Identity
 
+newtype Func b a = Func {appFunc :: a -> b}
+
 rApply :: RecF (Func b) ps -> RecF Identity ps -> RecF (Const b) ps
 rApply R0 R0 = R0
-rApply (R1 (Func f) next1) (R1 (Identity x) next2) =
-  R1 (Const (f x)) (rApply next1 next2)
+rApply (R1 (Func f) next1) (R1 (Identity x) next2) = R1 (Const (f x)) (rApply next1 next2)
 
 rFold :: (forall a . f a -> b -> b) -> b -> RecF f ps -> b
 rFold f base R0 = base
@@ -50,7 +51,7 @@ newtype Field (n::Symbol) a = Field a
 
 infixr 5 >:
 (>:) :: KnownSymbol n => Field n a -> Rec ps -> Rec ('(n,a) : ps)
-(Field x) >: xs = R1 (Identity x) xs
+(Field x) >: xs = Identity x `R1` xs
 
 
 
@@ -62,12 +63,9 @@ data HList :: (* -> *) -> [*] -> * where
   H0 :: HList f '[]
   H1 :: f t -> HList f ts -> HList f (t ': ts)
 
-newtype Func b a = Func {appFunc :: a -> b}
-
 hApply :: HList (Func b) ts -> HList Identity ts -> HList (Const b) ts
 hApply H0 H0 = H0
-hApply (H1 (Func f) next1) (H1 (Identity x) next2) =
-  H1 (Const (f x)) (hApply next1 next2)
+hApply (H1 (Func f) next1) (H1 (Identity x) next2) = H1 (Const (f x)) (hApply next1 next2)
 
 hFold :: (forall a . f a -> b -> b) -> b -> HList f ts -> b
 hFold f base H0 = base
