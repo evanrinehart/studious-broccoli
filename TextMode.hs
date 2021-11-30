@@ -160,8 +160,8 @@ putGlyph uniforms winWH (Glyph c) fg bg i j = do
     R0
   renderQuad
 
-slap :: VBO -> VAO -> Shader -> Gate UL1 -> Rect Float -> Tex -> IO ()
-slap vbo vao shader uniforms (Rect x y w h) tex = do
+slap :: VBO -> Paint UL1 -> Rect Float -> Tex -> IO ()
+slap vbo (Paint vao shader uniforms) (Rect x y w h) tex = do
   useVAO vao
   useVBO vbo
   useShader shader
@@ -175,11 +175,8 @@ slap vbo vao shader uniforms (Rect x y w h) tex = do
     R0
   renderQuad
 
-
-
-
 magicW :: Num a => a
-magicW = 400
+magicW = 800
 
 magicH :: Num a => a
 magicH = 600

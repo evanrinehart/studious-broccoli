@@ -18,16 +18,6 @@ newTicker = do
   t0 <- fmap toNanoSecs (getTime Monotonic)
   return (getCurrentTick t0)
 
-feedPerformanceComputer :: IORef [Double] -> ([Double] -> a) -> Double -> IO a
-feedPerformanceComputer ref f x = do
-  xs <- atomicModifyIORef' ref (\xs -> let xs' = take 20 (x:xs) in (xs',xs'))
-  return (f xs)
-
-newPerformanceComputer :: ([Double] -> a) -> IO (Double -> IO a)
-newPerformanceComputer f = do
-  ref <- newIORef [0]
-  return (feedPerformanceComputer ref f)
-
 -- returns milliseconds
 stopwatch :: IO a -> IO (a, Double)
 stopwatch action = do

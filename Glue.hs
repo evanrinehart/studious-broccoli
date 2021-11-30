@@ -24,6 +24,8 @@ newtype FBO = FBO GLuint
 
 newtype UL = UL GLint -- uniform location
 
+type Slapper = Rect Float -> Tex -> IO ()
+
 -- VAO
 newVAO :: IO VAO
 newVAO = do
@@ -208,14 +210,9 @@ renderQuad :: IO ()
 renderQuad = do
   glDrawArrays GL_TRIANGLES 0 6
 
-clearColorBuffer :: IO ()
-clearColorBuffer = do
-  glClearColor 1 0 0 1
-  glClear GL_COLOR_BUFFER_BIT
-
-clearWithGreen :: IO ()
-clearWithGreen = do
-  glClearColor 0 1 0 1
+clearColorBuffer :: Float -> Float -> Float -> IO ()
+clearColorBuffer r g b = do
+  glClearColor r g b 1
   glClear GL_COLOR_BUFFER_BIT
 
 cullBackFaces :: IO ()

@@ -19,6 +19,9 @@ yellow  = F3 1 1 0
 fi :: (Integral a, Num b) => a -> b
 fi = fromIntegral
 
+ffloor :: Double -> Double
+ffloor x = fi (floor x :: Int)
+
 {-  a01   b11
  -  c00   d10  -}
 tileData :: Vector Float
@@ -45,3 +48,11 @@ type UL1 =
   ,'("dstXY", Float2)
   ,'("dstWH", Float2)]
 
+
+newtype Act = Act (IO ())
+
+instance Monoid Act where
+  mempty = Act $ return ()
+
+instance Semigroup Act where
+  Act a <> Act b = Act (a >> b)

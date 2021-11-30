@@ -27,15 +27,17 @@ import Event
 import Ticks
 import Paint
 
-import MiniApp
-import TheThing
+import Forge
+import U
 
-main :: IO ()
-main = do
+import Performance
 
+import Gobbler
+
+glfwRitual = do
   GLFW.setErrorCallback $ Just $ \err msg -> do
-    print err
-    putStrLn msg
+    putStrLn ("Error: " ++ show err ++ " ; " ++ msg)
+    GLFW.terminate
     exitFailure
 
   -- GLFW init graphics
@@ -50,201 +52,63 @@ main = do
   Just win <- GLFW.createWindow 800 600 ":D" Nothing Nothing 
   GLFW.makeContextCurrent (Just win)
 
-  cullBackFaces
+  return win
 
-  -- GLFW callbacks
+
+glfwCallbacks win = do
   events <- newIORef []
 
   let push :: Event -> IO ()
-      push e = modifyIORef' events (e:)
+      push e = do
+        modifyIORef' events (e:)
 
   let r2f = realToFrac
   GLFW.setWindowSizeCallback win $ Just $ \win w h -> push (WinSize w h)
-  GLFW.setKeyCallback win $ Just $ \win key n state mods -> push (Keyboard key state n)
+  GLFW.setKeyCallback win $ Just $ \win key n state mods -> push (Keyboard key state mods n)
   GLFW.setCharCallback win $ Just $ \win c -> push (Typing c)
   GLFW.setMouseButtonCallback win $ Just $ \win button state mods -> push (MouseClick button state)
   GLFW.setCursorPosCallback win $ Just $ \win x y -> push (MouseMotion (r2f x) (r2f y))
   GLFW.setScrollCallback win $ Just $ \win dx dy -> push (Scroll (r2f dx) (r2f dy))
 
-  assertGL "preliminaries"
-
-  -- Fun ahead
-  --let console = Console.empty (114 `div` 2) 46
-  kit <- forgeAppKit win events
-  mainLoop win kit
-  GLFW.terminate
-
-forgeAppKit :: GLFW.Window -> IORef [Event] -> IO AppKit
-forgeAppKit win events = do
-
-  let getWindowDims = GLFW.getWindowSize win >>= \(w,h) -> return $ F2 (fi w) (fi h)
-
-  vbo <- loadBasicTile
-  basic3 <- loadBasicShader vbo
-  sheet <- loadTextureFromFile "dungeon.png"
-  let useDungeon = newSpriteTool getWindowDims sheet vbo basic3
-
-  font3 <- loadGlyphShader vbo
-  font <- loadTextureFromFile "cozette.png"
-  (fbo,surf) <- newTextSurface
-  let textTool = newTextTool vbo font font3 fbo
-  
-  Paint v1 s1 l1 <- loadStraightShader vbo
-  
-  let awYeah dst tex = slap vbo v1 s1 l1 dst tex 
-
-  let offwhite  = (F3 0.9 0.9 0.9)
-  let black     = (F3 0 0 0)
-
-  textTool \burn -> do
-    burn (Glyph 32) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 0
-    burn (Glyph 33) (F3 0.9 0.9 0.9) (F3 0 0 0) 1 0
-    burn (Glyph 34) (F3 0.9 0.9 0.9) (F3 0 0 0) 2 0
-    burn (Glyph 35) (F3 0.9 0.9 0.9) (F3 0 0 0) 3 0
-    burn (Glyph 36) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 1
-    burn (Glyph 37) (F3 0.9 0.9 0.9) (F3 0 0 0) 1 1
-    burn (Glyph 38) (F3 0.9 0.9 0.9) (F3 0 0 0) 2 1
-    burn (Glyph 39) (F3 0.9 0.9 0.9) (F3 0 0 0) 3 1
-    burn (Glyph 40) (F3 0.9 0.9 0.9) (F3 0 0 0) 0 2
-    burn (Glyph 41) (F3 0.9 0.9 0.9) (F3 0 0 0) 1 2
-
-  Just t <- GLFW.getTime
-  prev <- newIORef t
-
-  getTick <- newTicker
-  oldTick <- newIORef 0
-
-  pc1 <- newPerformanceComputer pc1View
-  pc2 <- newPerformanceComputer pc2View
-
-  cc <- newIORef 0
-
-  thing <- makeTheThing textTool
-
-  return $ AppKit
-    { appWin = win
-    , appQuit = GLFW.setWindowShouldClose win True
-    , appTakeEvents = atomicModifyIORef events (\es -> ([], es))
-    , appDungeon = useDungeon
-    , appText = textTool
-    , appSlap = awYeah
-    , appVarPrev = prev
-    , appGetTick = getTick
-    , appOldTick = oldTick
-    , appPC1 = pc1
-    , appPC2 = pc2
-    , appThing = thing
-    , appMinis = [(Rect 0 0 400 600, surf, thing)]
-    , appVarCC = cc }
-
-data AppKit = AppKit
-  { appWin         :: GLFW.Window
-  , appQuit        :: IO ()
-  , appTakeEvents  :: IO [Event]
-  , appDungeon     :: SpriteTool
-  , appText        :: TextTool
-  , appSlap        :: Rect Float -> Tex -> IO ()
-  , appVarPrev     :: IORef Double
-  , appGetTick     :: IO Int
-  , appOldTick     :: IORef Int
-  , appPC1         :: Double -> IO Double
-  , appPC2         :: Double -> IO Double
-  , appVarCC       :: IORef Int
-  , appThing       :: MiniApp
-  , appMinis       :: [(Rect Float, Tex, MiniApp)] }
+  return events
 
 
--- for the interframe delta where less than 33ms is interpreted as a hit
-pc1View :: [Double] -> Double
-pc1View xs = 100 * hits / (hits + misses) where
-  hits :: Double
-  hits = foldl' (+) 0 (map (\x -> if x/33 < 1 then 1 else 0) xs)
-  misses :: Double
-  misses = foldl' (+) 0 (map (\x -> ffloor (x/33)) xs)
+miscOtherStuff = do
+  cullBackFaces -- debug only
 
--- for health of the main loop body which ought to take at most 16.666ms
--- formula: divide 16.666 by the measured time, log10, avg, exp10
-pc2View :: [Double] -> Double
-pc2View = (\x -> 10000 - x) . (*10000) . avg . map (\x -> x / 16.666) where
-  avg xs = sum xs / fi (length xs)
 
-ffloor :: Double -> Double
-ffloor x = fi (floor x :: Int)
 
--- time notes
--- need frame delta for 'bogofps' percent (need Q, need prev time)
--- need update duration for frame score (100 * (16.666 / dur)) (need Q)
--- need game step counter for fixed time update speed
+{- *** Main Loop *** -}
 
-mainLoop :: GLFW.Window -> AppKit -> IO ()
 mainLoop win kit = do
 
-  let var = appOldTick kit
-  that <- readIORef var
-  this <- appGetTick kit
-  let n = this - that
-  writeIORef var this
-
   -- { begin timed section
-  ((), intraFrameTime) <- stopwatch $ do
-
-    -- pump the event handlers (and windowing system)
+  performanceBracket (appGauge kit) $ do
+    -- populate appEvents
     GLFW.pollEvents
-    es <- appTakeEvents kit
+    
+    clearColorBuffer 0 1 0
+    readIORef (appGobblers kit) >>= sequence_ -- deploy the gobblers
 
-    forM_ [(m,e)|e<-es,m<-appMinis kit] $ \((_, _, mini),e) -> maPoke mini e
-
-    forM_ es $ \e -> case e of
-      Keyboard GLFW.Key'Escape _ _ -> appQuit kit
-      _ -> return ()
-
-
-    -- time passes for animating subprocess
-    forM_ (appMinis kit) $ \(_, _, mini) -> maTime mini n
-
-
-    -- render orbitting sprites and the console
-    Just t <- fmap (fmap realToFrac) GLFW.getTime
-    let d = 2 * pi / 5
-
-    forM_ (appMinis kit) $ \(_, _, mini) -> maShow mini
-
-    clearColorBuffer
-
-    -- some sprites
-    appDungeon kit $ \brush -> do
-      let f s phi = let x=64*sin phi + 600; y=64*cos phi+300 in brush (from s) (to x y)
-      f bricks t
-      f orb (t + d)
-      f monster (t + 2*d)
-      f ogre (t + 3*d)
-      f knight (t + 4*d)
-
-    -- display all miniapp panes
-    forM_ (appMinis kit) $ \(dst, tex, _) -> appSlap kit dst tex
+    writeIORef (appEvents kit) []
   -- end timed section }
 
-  -- performance computations
-  prev <- readIORef (appVarPrev kit)
-  Just now <- GLFW.getTime
-  let interFrameDelta = 1000 * (now - prev)
-  writeIORef (appVarPrev kit) now
-  percent <- appPC1 kit interFrameDelta
-  rt <- appPC2 kit intraFrameTime
-
   -- temporary, print out performance every 30 frames
-  let ref = appVarCC kit
-  i <- readIORef ref
+  let cc = appCC kit
+  i <- readIORef cc
   when (i `mod` 60 == 0) $ do
-    putStr (printf "%05.1f" percent ++ "%")
-    putStrLn (" (" ++ printf "%04d" (max 0 (floor rt :: Int)) ++ ")")
-  writeIORef ref (i+1)
+    (health,armor) <- (readIORef . rMetrics . appGauge) kit
+    putStr (printf "%05.1f" health ++ "%")
+    putStrLn (" (" ++ printf "%04d" (max 0 armor) ++ ")")
+  writeIORef cc (i+1)
 
   -- show graphics / sleep
   GLFW.swapBuffers win
   GLFW.windowShouldClose win >>= \b -> case b of
     False -> mainLoop win kit
     True  -> return ()
+
+{- *** End Main Loop *** -}
 
 
 
@@ -267,8 +131,6 @@ from (i,j) = (Rect sx sy 32 32) where
   sx = fi i * 32
   sy = fi j * 32
 
-
-
 basicMiniApp :: MiniApp
 basicMiniApp = this where
   f e = print e
@@ -278,3 +140,46 @@ basicMiniApp = this where
     { maPoke = f
     , maTime = g
     , maShow = h }
+
+-- ... ... ...
+
+
+
+hireOracle :: IORef [Event] -> E [Event]
+hireOracle ref = sysE $ do
+  es <- readIORef ref
+  case es of
+    [] -> return Nothing
+    _  -> do
+      return (Just es)
+
+data AppKit = AppKit
+  { appEvents :: IORef [Event]
+  , appGauge :: PerformanceStuff
+  , appGobblers :: IORef [IO ()]
+  , appCC :: IORef Int
+  }
+
+main = do
+
+  win    <- glfwRitual 
+  events <- glfwCallbacks win
+
+  gfx    <- loadGfx
+  let ruler = makeWindowRuler win
+  tools  <- forgeTools ruler gfx
+  gauge  <- buyPerformanceStuff
+
+  let src = hireOracle events
+
+  let artificialBS = E [Just [Keyboard GLFW.Key'Backspace GLFW.KeyState'Pressed undefined 0]]
+  let thing = cmdLine 256 (src <> artificialBS)
+
+  gobble <- hatchGobbler gfx tools thing
+  gobblers <- newIORef [gobble]
+
+  counter <- newIORef 0
+
+  let kit = AppKit events gauge gobblers counter
+
+  mainLoop win kit

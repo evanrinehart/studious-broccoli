@@ -19,10 +19,12 @@ extra-source-files:  CHANGELOG.md
 executable Nov2021-C
   main-is:             Main.hs
   other-modules:       Console, Buffer2D, Glue, Ticks, SpriteMode,
-                       TextMode, Common, Event, TheThing, MiniApp,
-                       Paint, HList
+                       TextMode, Common, Event, Forge,
+                       Paint, HList, U, Gobbler, Performance,
+                       TextCtrl
   -- other-extensions:
   build-depends:       base < 5, GLFW-b, gl, vector, JuicyPixels, containers,
-                       random, clock, mtl
+                       random, clock, mtl, comonad
   -- hs-source-dirs:
   default-language:    Haskell2010
+  ghc-options:         -Wall
