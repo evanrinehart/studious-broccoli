@@ -11,24 +11,45 @@ import U
 
 import TextCtrl
 
-type ConsoleM = RWS Int (Maybe String) (Int,String)
+type ConsoleM = RWS () (Maybe String) (Int,String)
 
+-- COULD DO: save the executed command to history
+-- up down flips back and forth in history
+
+-- command ideas
+-- show environment (first, have an environment)
+-- grab item, tool
+-- use tool (e.g. add)
+-- paint a brush stroke or blit a sprite somewhere
+-- (could any shape painted be associated with an ID for purposes?)
+
+
+-- when an event makes it through, update the cmdLine, notify
+-- with current state, and a second event occurs on command entry.
 cmdLine :: Int -> E [Event] -> (E (Int,String), E String)
 cmdLine curMax rawE = (updateE, commandE) where
+  updateE :: E (Int,String)
   updateE = fmap fst aftermathE
+
+  commandE :: E String
   commandE = filterMap snd aftermathE
+
   aftermathE :: E ((Int,String),Maybe String)
-  aftermathE = snap (runConsole curMax) inputE selfV -- (potential output, new state)
-  inputE = filterMap cook rawE -- will select at most 1 event and drop the others
+  aftermathE = snap runControl inputE selfV -- (potential output, new state)
+
+  inputE :: E TextCtrl
+  inputE = inject Backspace (\x y -> y) $ filterMap cook rawE -- will select at most 1 event and drop the others
   cook = listToMaybe . catMaybes . map parseTextCtrl
+
+  selfV :: V (Int,String)
   selfV = hold (0,"") updateE
 
 nonEmpty [] = Nothing
 nonEmpty xs = Just xs
 
 -- RWS subprogram for the console
-runConsole :: Int -> TextCtrl -> (Int,String) -> ((Int,String),Maybe String)
-runConsole curMax ctrl s@(i,buf) = execRWS go curMax (i,buf) where
+runControl :: TextCtrl -> (Int,String) -> ((Int,String),Maybe String)
+runControl ctrl (i,buf) = execRWS go () (i,buf) where
   go = case ctrl of
     PutChar c -> do
       insert c
@@ -36,10 +57,10 @@ runConsole curMax ctrl s@(i,buf) = execRWS go curMax (i,buf) where
     Backspace -> do
       moveLeft
       erase
-    MoveLeft -> moveLeft
+    MoveLeft  -> moveLeft
     MoveRight -> moveRight
     Home -> goHome
-    End -> goEnd
+    End  -> goEnd
     Enter -> do
       execute buf
       returnAndClearAll

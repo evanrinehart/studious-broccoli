@@ -60,6 +60,11 @@ never = E (repeat Nothing)
 once x = E (Just x : repeat Nothing)
 delay (E es) = E (replicate 5 Nothing ++ es)
 
+-- put an initial occurrence or merge it in if already occurring
+inject :: a -> (a -> a -> a) -> E a -> E a
+inject x f (E (Nothing:ee)) = E (Just x : ee)
+inject x f (E (Just y:ee))  = E (Just (f x y) : ee)
+
 filterMap :: (a -> Maybe b) -> E a -> E b
 filterMap f (E es) = E (fmap g es) where
   g (Just x) = f x

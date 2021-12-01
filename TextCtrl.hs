@@ -21,6 +21,13 @@ data TextCtrl
 
 parseTextCtrl :: Event -> Maybe TextCtrl
 parseTextCtrl e = go where
+  go = case e of
+    Keyboard k state mods n -> case state of
+      KeyState'Pressed -> f k
+      KeyState'Repeating -> f k
+      _ -> Nothing
+    Typing c -> Just (PutChar c)
+    _ -> Nothing
   f k = case k of
     Key'Backspace -> Just Backspace
     Key'Left -> Just MoveLeft
@@ -34,11 +41,4 @@ parseTextCtrl e = go where
     Key'Home -> Just Home
     Key'End -> Just End
     Key'Enter -> Just Enter
-    _ -> Nothing
-  go = case e of
-    Keyboard k state mods n -> case state of
-      KeyState'Pressed -> f k
-      KeyState'Repeating -> f k
-      _ -> Nothing
-    Typing c -> Just (PutChar c)
     _ -> Nothing

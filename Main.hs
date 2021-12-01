@@ -93,7 +93,9 @@ mainLoop win kit = do
     writeIORef (appEvents kit) []
   -- end timed section }
 
+
   -- temporary, print out performance every 30 frames
+{-
   let cc = appCC kit
   i <- readIORef cc
   when (i `mod` 60 == 0) $ do
@@ -101,6 +103,8 @@ mainLoop win kit = do
     putStr (printf "%05.1f" health ++ "%")
     putStrLn (" (" ++ printf "%04d" (max 0 armor) ++ ")")
   writeIORef cc (i+1)
+-}
+
 
   -- show graphics / sleep
   GLFW.swapBuffers win
@@ -172,14 +176,23 @@ main = do
 
   let src = hireOracle events
 
-  let artificialBS = E [Just [Keyboard GLFW.Key'Backspace GLFW.KeyState'Pressed undefined 0]]
-  let thing = cmdLine 256 (src <> artificialBS)
+  let thing = cmdLine 256 src
 
+  let quitter = equipQuitter win events
   gobble <- hatchGobbler gfx tools thing
-  gobblers <- newIORef [gobble]
+  gobblers <- newIORef [gobble, quitter]
 
   counter <- newIORef 0
 
   let kit = AppKit events gauge gobblers counter
 
   mainLoop win kit
+
+
+
+
+equipQuitter win ref = do
+  xs <- readIORef ref
+  forM_ xs $ \x -> case x of
+    Keyboard GLFW.Key'Escape GLFW.KeyState'Pressed _ _ -> GLFW.setWindowShouldClose win True
+    _ -> return ()

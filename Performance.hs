@@ -3,6 +3,7 @@ module Performance where
 
 import Data.IORef
 import Data.Foldable
+import Control.Exception
 
 import Ticks
 import Common
@@ -44,6 +45,8 @@ performanceBracket (PerformanceStuff{getTime,rPrev,rPC1,rPC2,rMetrics}) action =
   health <- feedPerformanceComputer rPC1 pc1View interFrameDelta
   armor  <- feedPerformanceComputer rPC2 pc2View intraFrameDelta
 
+  evaluate health
+  evaluate armor
   writeIORef rMetrics (health, floor armor)
 
 feedPerformanceComputer :: IORef [Double] -> ([Double] -> a) -> Double -> IO a
