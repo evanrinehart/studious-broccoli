@@ -133,6 +133,7 @@ getVorb file total out = go 0 total where
 vorbTaker :: Vorbis.File -> IOVector Float -> IO ()
 vorbTaker file out = getVorb file 1024 out
 
+{-
 -- load all the data into a buffer (assumes mono)
 loadVorb :: Vorbis.File -> IO Chunk
 loadVorb file = do
@@ -142,6 +143,33 @@ loadVorb file = do
     go :: Buffer -> Int -> Int -> IO Chunk
     go buf ptr size = do
       result <- vorbChunkMono file 4096
+      case result of
+        Nothing -> do
+          V.freeze (MV.slice 0 ptr buf)
+        Just chunk -> do
+          let m = V.length chunk
+          if ptr + m > size
+            then do
+              let size' = size * 2
+              buf' <- MV.grow buf size'
+              copyy (MV.slice ptr m buf') chunk
+              go buf' (ptr + m) size'
+            else do
+              copyy (MV.slice ptr m buf) chunk
+              go buf (ptr + m) size
+-}
+
+hoardVorb :: VorbStream -> IO Chunk
+hoardVorb stream = do
+  let size0 = 4096
+  buf0 <- MV.new size0
+  stash <- go buf0 0 size0
+  vsClose stream
+  return stash where
+    go :: Buffer -> Int -> Int -> IO Chunk
+    go buf ptr size = do
+      result <- vsChunk stream 4096
+--vorbChunkMono file 4096
       case result of
         Nothing -> do
           V.freeze (MV.slice 0 ptr buf)
@@ -226,6 +254,7 @@ newVorbStreamer path = do
   -- the file is closed when the handle is GC'd
   return (Sound (vorbTaker file))
 
+{-
 newVorbPlayer :: FilePath -> IO Sound
 newVorbPlayer path = do
   file <- Vorbis.openFile path
@@ -233,6 +262,7 @@ newVorbPlayer path = do
   Vorbis.close file
   ref <- newIORef 0
   return (Sound (chunkPlayer ref chunk))
+-}
   
 -- spawn a thread that mixes sources of sound
 -- pushes mixed chunks into a TMVar
@@ -306,8 +336,9 @@ setupAudio = do
 
   --src2 <- makePureTone
 
-  file <- Vorbis.openFile "sounds/alert1.ogg"
-  chunk <- loadVorb file
+  --file <- Vorbis.openFile "sounds/alert1.ogg"
+  stream <- openVorbSmart "sounds/c#5.ogg"
+  chunk <- hoardVorb stream
   let insertTape = do
         let t = Tape 0 (V.length chunk) chunk
         atomically (takeTMVar tapesV >>= putTMVar tapesV . (t:))
