@@ -21,10 +21,11 @@ executable Nov2021-C
   other-modules:       Console, Buffer2D, Glue, Ticks, SpriteMode,
                        TextMode, Common, Event, Forge,
                        Paint, HList, U, Gobbler, Performance,
-                       TextCtrl
+                       TextCtrl, Audio
   -- other-extensions:
   build-depends:       base < 5, GLFW-b, gl, vector, JuicyPixels, containers,
-                       random, clock, mtl, comonad
+                       random, clock, mtl, comonad, vector, text, sdl2, stm,
+                       libvorbis, bytestring
   -- hs-source-dirs:
   default-language:    Haskell2010
-  ghc-options:         -Wall
+  ghc-options:         -O2 -Wall -rtsopts -threaded

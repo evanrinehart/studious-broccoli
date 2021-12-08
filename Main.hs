@@ -34,6 +34,8 @@ import Performance
 
 import Gobbler
 
+import Audio
+
 glfwRitual = do
   GLFW.setErrorCallback $ Just $ \err msg -> do
     putStrLn ("Error: " ++ show err ++ " ; " ++ msg)
@@ -166,6 +168,8 @@ data AppKit = AppKit
 
 main = do
 
+  audio  <- setupAudio
+
   win    <- glfwRitual 
   events <- glfwCallbacks win
 
@@ -187,6 +191,8 @@ main = do
   let kit = AppKit events gauge gobblers counter
 
   mainLoop win kit
+
+  teardownAudio audio
 
 
 
