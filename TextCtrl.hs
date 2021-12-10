@@ -20,25 +20,21 @@ data TextCtrl
   | Enter
 
 parseTextCtrl :: Event -> Maybe TextCtrl
-parseTextCtrl e = go where
-  go = case e of
-    Keyboard k state mods n -> case state of
-      KeyState'Pressed -> f k
-      KeyState'Repeating -> f k
-      _ -> Nothing
-    Typing c -> Just (PutChar c)
-    _ -> Nothing
-  f k = case k of
-    Key'Backspace -> Just Backspace
-    Key'Left -> Just MoveLeft
-    Key'Right -> Just MoveRight
-    Key'Up -> Just MoveUp
-    Key'Down -> Just MoveDown
-    Key'PageUp -> Just PageUp
-    Key'PageDown -> Just PageDown
-    Key'Delete -> Just Delete
-    Key'Tab -> Just Tab
-    Key'Home -> Just Home
-    Key'End -> Just End
-    Key'Enter -> Just Enter
-    _ -> Nothing
+parseTextCtrl (KeyboardDown k _) = hmm k
+parseTextCtrl (KeyboardAgain k _) = hmm k
+parseTextCtrl (Typing c) = Just (PutChar c)
+
+hmm k = case k of
+  KBBackspace -> Just Backspace
+  KBLeft -> Just MoveLeft
+  KBRight -> Just MoveRight
+  KBUp -> Just MoveUp
+  KBDown -> Just MoveDown
+  KBPageUp -> Just PageUp
+  KBPageDown -> Just PageDown
+  KBDelete -> Just Delete
+  KBTab -> Just Tab
+  KBHome -> Just Home
+  KBEnd -> Just End
+  KBEnter -> Just Enter
+  _ -> Nothing

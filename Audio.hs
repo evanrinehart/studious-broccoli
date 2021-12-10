@@ -342,6 +342,7 @@ setupAudio = do
   let insertTape = do
         let t = Tape 0 (V.length chunk) chunk
         atomically (takeTMVar tapesV >>= putTMVar tapesV . (t:))
+
   forkIO $ do
     threadDelay (3 * 1000000)
     insertTape

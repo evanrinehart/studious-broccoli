@@ -1,204 +1,117 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DataKinds #-}
 module Main where
 
-import System.Exit
 import Data.IORef
-import Control.Monad (when, forM, forM_)
+import Control.Monad
 import Data.Foldable
-import System.Random
-import Numeric
-import Text.Printf
+--import System.Random
+--import Numeric
+--import Text.Printf
 import Data.Char
 
 import qualified Graphics.UI.GLFW as GLFW
-import qualified Data.IntMap as IM
+--import qualified Data.IntMap as IM
 
-import Graphics.GL
+--import Graphics.GL
 
 import Common
 import Glue
-import TextMode
-import SpriteMode
-import Console
---import DebugPanel
 import Event
 import Ticks
-import Paint
+import Rainbow
 
-import Forge
-import U
+data MainDriver = MainDriver
+  { mdClock :: IO Int
+  , mdEvents :: IO [Event]
+  , mdDead :: IO Bool
+  , mdRender :: IO ()
+  , mdDoTick :: IO ()
+  , mdHandler :: [Event] -> IO ()
+  }
 
-import Performance
+mainLoop :: MainDriver -> IO ()
+mainLoop md = mdClock md >>= loop where
+  loop prev = do
+    evs <- mdEvents md
+    when (not (null evs)) (mdHandler md evs)
 
-import Gobbler
+    now <- mdClock md
+    let delta = now - prev
+    replicateM_ delta (mdDoTick md)
 
-import Audio
+    mdRender md
 
-glfwRitual = do
-  GLFW.setErrorCallback $ Just $ \err msg -> do
-    putStrLn ("Error: " ++ show err ++ " ; " ++ msg)
-    GLFW.terminate
-    exitFailure
-
-  -- GLFW init graphics
-  GLFW.init -- returns False on failure
-
-  GLFW.windowHint (GLFW.WindowHint'ContextVersionMajor 3)
-  GLFW.windowHint (GLFW.WindowHint'ContextVersionMinor 2)
-  GLFW.windowHint (GLFW.WindowHint'OpenGLForwardCompat True)
-  GLFW.windowHint (GLFW.WindowHint'OpenGLProfile GLFW.OpenGLProfile'Core)
-
-  -- summon a window
-  Just win <- GLFW.createWindow 800 600 ":D" Nothing Nothing 
-  GLFW.makeContextCurrent (Just win)
-
-  return win
-
-
-glfwCallbacks win = do
-  events <- newIORef []
-
-  let push :: Event -> IO ()
-      push e = do
-        modifyIORef' events (e:)
-
-  let r2f = realToFrac
-  GLFW.setWindowSizeCallback win $ Just $ \win w h -> push (WinSize w h)
-  GLFW.setKeyCallback win $ Just $ \win key n state mods -> push (Keyboard key state mods n)
-  GLFW.setCharCallback win $ Just $ \win c -> push (Typing c)
-  GLFW.setMouseButtonCallback win $ Just $ \win button state mods -> push (MouseClick button state)
-  GLFW.setCursorPosCallback win $ Just $ \win x y -> push (MouseMotion (r2f x) (r2f y))
-  GLFW.setScrollCallback win $ Just $ \win dx dy -> push (Scroll (r2f dx) (r2f dy))
-
-  return events
-
-
-miscOtherStuff = do
-  cullBackFaces -- debug only
+    dead1 <- mdDead md
+    let dead2 = any isEscape evs
+    when (not (dead1 || dead2)) (loop now)
 
 
 
-{- *** Main Loop *** -}
+data MiniApp = MA
+  { maHandle :: [Event] -> IO ()
+  , maUpdate :: IO ()
+  , maRender :: IO () }
 
-mainLoop win kit = do
+debugger gfx = do
 
-  -- { begin timed section
-  performanceBracket (appGauge kit) $ do
-    -- populate appEvents
-    GLFW.pollEvents
-    
-    clearColorBuffer 0 1 0
-    readIORef (appGobblers kit) >>= sequence_ -- deploy the gobblers
+  canvas <- newCanvas 320 480
+  useFBO (canvasFbo canvas)
+  clearColorBuffer 1 1 1
+  useFBO (FBO 0)
 
-    writeIORef (appEvents kit) []
-  -- end timed section }
+  let white = F3 1 1 1
+  let black = F3 0 0 0
 
+  --let box = 33 + 40 * 35 + 30 + 369
+  --darkbox = 33 + 40 * 35 + 29
 
-  -- temporary, print out performance every 30 frames
-{-
-  let cc = appCC kit
-  i <- readIORef cc
-  when (i `mod` 60 == 0) $ do
-    (health,armor) <- (readIORef . rMetrics . appGauge) kit
-    putStr (printf "%05.1f" health ++ "%")
-    putStrLn (" (" ++ printf "%04d" (max 0 armor) ++ ")")
-  writeIORef cc (i+1)
--}
+  return $ MA{
+    maHandle=(\es -> do
+      print es
+      withFont gfx canvas $ \torch -> do
+        forM_ [(x,y)|x<-[0..44],y<-[0..35]] $ \(i,j) -> do
+          torch 'A' black white (I2 i j)
+    ),
+    maUpdate=return (),
+    maRender=blitCanvas gfx canvas (F2 (-320) (-240))
+  }
 
+arena gfx = do
+  canvas <- newCanvas 320 480
+  (sheet,_) <- loadTextureFromFile "dungeon.png"
+  useFBO (canvasFbo canvas)
+  clearColorBuffer 0 0 0
+  useFBO (FBO 0)
 
-  -- show graphics / sleep
-  GLFW.swapBuffers win
-  GLFW.windowShouldClose win >>= \b -> case b of
-    False -> mainLoop win kit
-    True  -> return ()
-
-{- *** End Main Loop *** -}
-
-
-
-
--- misc
-bricks  = (8,3)
-orb     = (1,8)
-monster = (11,3)
-ogre    = (5,11)
-knight  = (5,7)
-
-to :: Float -> Float -> Rect Float
-to x y = Rect dx dy w w where
-  dx = x - w/2
-  dy = y - w/2
-  w = 32
-
-from :: (Int,Int) -> Rect Float
-from (i,j) = (Rect sx sy 32 32) where
-  sx = fi i * 32
-  sy = fi j * 32
-
-basicMiniApp :: MiniApp
-basicMiniApp = this where
-  f e = print e
-  g n = putStrLn ("time + " ++ show n)
-  h = putStrLn "repaint"
-  this = MiniApp
-    { maPoke = f
-    , maTime = g
-    , maShow = h }
-
--- ... ... ...
-
-
-
-hireOracle :: IORef [Event] -> E [Event]
-hireOracle ref = sysE $ do
-  es <- readIORef ref
-  case es of
-    [] -> return Nothing
-    _  -> do
-      return (Just es)
-
-data AppKit = AppKit
-  { appEvents :: IORef [Event]
-  , appGauge :: PerformanceStuff
-  , appGobblers :: IORef [IO ()]
-  , appCC :: IORef Int
+  return $ MA{
+    maHandle=(\es -> do
+      withSprites gfx sheet canvas $ \torch -> do
+        forM_ [(x,y)|x<-[0..12],y<-[0..12]] $ \(i,j) -> do
+          torch (j*13 + i) (F2 (fi (i*32 - 640`div`4)) (fi (j*32 - 480`div`2 + 64)))
+    ),
+    maUpdate=return (),
+    maRender=blitCanvas gfx canvas (F2 0 (-240))
   }
 
 main = do
+  var <- newIORef []
+  (win,gfx) <- rainbow 640 480 2 var
 
-  audio  <- setupAudio
+  ticker <- newTicker
 
-  win    <- glfwRitual 
-  events <- glfwCallbacks win
+  app1 <- debugger gfx
+  app2 <- arena gfx
 
-  gfx    <- loadGfx
-  let ruler = makeWindowRuler win
-  tools  <- forgeTools ruler gfx
-  gauge  <- buyPerformanceStuff
+  mainLoop $ MainDriver{
+    mdClock=ticker,
+    mdEvents=GLFW.pollEvents >> atomicModifyIORef' var (\x -> ([], x)),
+    mdDead=GLFW.windowShouldClose win,
+    mdRender=clearColorBuffer 0 1 0 >> maRender app1 >> maRender app2 >> GLFW.swapBuffers win,
+    mdDoTick=maUpdate app1 >> maUpdate app2,
+    mdHandler=(\e -> maHandle app1 e >> maHandle app2 e)
+  }
 
-  let src = hireOracle events
-
-  let thing = cmdLine 256 src
-
-  let quitter = equipQuitter win events
-  gobble <- hatchGobbler gfx tools thing
-  gobblers <- newIORef [gobble, quitter]
-
-  counter <- newIORef 0
-
-  let kit = AppKit events gauge gobblers counter
-
-  mainLoop win kit
-
-  teardownAudio audio
-
-
-
-
-equipQuitter win ref = do
-  xs <- readIORef ref
-  forM_ xs $ \x -> case x of
-    Keyboard GLFW.Key'Escape GLFW.KeyState'Pressed _ _ -> GLFW.setWindowShouldClose win True
-    _ -> return ()

@@ -4,8 +4,10 @@ module Common where
 import Data.Vector.Storable as V (Vector, fromList)
 import Graphics.GL
 
-data Float2 = F2 !Float !Float
-data Float3 = F3 !Float !Float !Float
+data Int2 = I2 !Int !Int deriving Show
+data Float2 = F2 !Float !Float deriving Show
+data Float3 = F3 !Float !Float !Float deriving Show
+data Float4 = F4 !Float !Float !Float !Float deriving Show
 data Rect a = Rect !a !a !a !a
 type RGB = Float3
 
@@ -18,6 +20,9 @@ yellow  = F3 1 1 0
 
 fi :: (Integral a, Num b) => a -> b
 fi = fromIntegral
+
+i22f2 :: Int2 -> Float2
+i22f2 (I2 x y) = F2 (fi x) (fi y)
 
 ffloor :: Double -> Double
 ffloor x = fi (floor x :: Int)

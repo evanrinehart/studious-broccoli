@@ -23,17 +23,11 @@ type SpriteTool = (BurnSprite -> IO ()) -> IO ()
 -- texture
 -- vbo
 
-loadBasicTile :: IO VBO
-loadBasicTile = storableVectorToVBO tileData
-
-loadTextureFromFile :: FilePath -> IO Tex
-loadTextureFromFile path = do
-  tex <- readImage path >>= \x -> case x of
-    Left msg -> putStrLn (path ++ ": " ++ msg) >> exitFailure
-    Right di -> pictureToTex di
-  assertGL "load image file"
-  return tex
-
+-- this basic shader displays parts of a sprite sheet
+-- on target surface. It mirrors the image vertically
+-- since texture data loaded from files is upside down.
+-- For this reason, don't use it to display contents
+-- of a secondary texture generated via FBO
 loadBasicShader :: VBO -> IO (Paint UL1)
 loadBasicShader vbo = do
   vao <- newVAO

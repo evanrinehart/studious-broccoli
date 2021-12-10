@@ -42,6 +42,9 @@ ug2f next = (\(UL i) (F2 x y) -> setUniform2f i x y) `frame` next
 ug3f :: KnownSymbol n => RecF Frame ps -> RecF Frame ('(n,Float3) : ps)
 ug3f next = (\(UL i) (F3 x y z) -> setUniform3f i x y z) `frame` next
 
+ug4f :: KnownSymbol n => RecF Frame ps -> RecF Frame ('(n,Float4) : ps)
+ug4f next = (\(UL i) (F4 x y z w) -> setUniform4f i x y z w) `frame` next
+
 capstone :: RecF Frame '[]
 capstone = R0
 
@@ -75,4 +78,5 @@ numbers =
   Field @"numberB" 4 >:
   Field @"numberC" 999 >:
   R0
+
 

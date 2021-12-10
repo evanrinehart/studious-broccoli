@@ -3,8 +3,6 @@ module Console where
 import Control.Monad.RWS
 import Data.Maybe
 
-import qualified Graphics.UI.GLFW as GLFW
-
 import Common 
 import Event
 import U
@@ -13,21 +11,10 @@ import TextCtrl
 
 type ConsoleM = RWS () (Maybe String) (Int,String)
 
--- COULD DO: save the executed command to history
--- up down flips back and forth in history
-
--- command ideas
--- show environment (first, have an environment)
--- grab item, tool
--- use tool (e.g. add)
--- paint a brush stroke or blit a sprite somewhere
--- (could any shape painted be associated with an ID for purposes?)
-
-
 -- when an event makes it through, update the cmdLine, notify
 -- with current state, and a second event occurs on command entry.
-cmdLine :: Int -> E [Event] -> (E (Int,String), E String)
-cmdLine curMax rawE = (updateE, commandE) where
+cmdLine :: E [Event] -> (E (Int,String), E String)
+cmdLine rawE = (updateE, commandE) where
   updateE :: E (Int,String)
   updateE = fmap fst aftermathE
 
@@ -38,32 +25,23 @@ cmdLine curMax rawE = (updateE, commandE) where
   aftermathE = snap runControl inputE selfV -- (potential output, new state)
 
   inputE :: E TextCtrl
-  inputE = inject Backspace (\x y -> y) $ filterMap cook rawE -- will select at most 1 event and drop the others
+  inputE = inject Backspace (\x y -> y) $ filterMap cook rawE
   cook = listToMaybe . catMaybes . map parseTextCtrl
 
   selfV :: V (Int,String)
   selfV = hold (0,"") updateE
 
-nonEmpty [] = Nothing
-nonEmpty xs = Just xs
-
 -- RWS subprogram for the console
 runControl :: TextCtrl -> (Int,String) -> ((Int,String),Maybe String)
 runControl ctrl (i,buf) = execRWS go () (i,buf) where
   go = case ctrl of
-    PutChar c -> do
-      insert c
-      moveRight
-    Backspace -> do
-      moveLeft
-      erase
+    PutChar c -> insert c >> moveRight
+    Backspace -> moveLeft >> erase
     MoveLeft  -> moveLeft
     MoveRight -> moveRight
     Home -> goHome
     End  -> goEnd
-    Enter -> do
-      execute buf
-      returnAndClearAll
+    Enter -> execute buf >> returnAndClearAll
     _ -> return ()
 
 goHome = modify (\(i,buf) -> (0, buf))
@@ -113,18 +91,4 @@ moveRight = do
   modify $ \(i,buf) -> (min l (i+1), buf)
 
 returnAndClearAll = modify (\(i,buf) -> (0,""))
-
-
-{-
--- sort through GLFW stuff
-parseRaw ev = case ev of
-  Keyboard GLFW.Key'Left GLFW.KeyState'Pressed _      -> Just MoveLeft
-  Keyboard GLFW.Key'Right GLFW.KeyState'Pressed _     -> Just MoveRight
-  Keyboard GLFW.Key'Backspace GLFW.KeyState'Pressed _ -> Just Backspace
-  Keyboard GLFW.Key'Enter GLFW.KeyState'Pressed _     -> Just Enter
-  Keyboard GLFW.Key'Home GLFW.KeyState'Pressed _      -> Just Home
-  Keyboard GLFW.Key'End GLFW.KeyState'Pressed _       -> Just End
-  Typing c                                            -> Just (CharInput c)
-  _                                                   -> Nothing
--}
 

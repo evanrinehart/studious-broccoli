@@ -55,7 +55,7 @@ storableVectorToVBO v = do
 newShader :: String -> String -> String -> String -> IO Shader
 newShader vsname vscode fsname fscode = do
   vs <- compileShader vsname vscode GL_VERTEX_SHADER
-  fs <- compileShader fscode fscode GL_FRAGMENT_SHADER
+  fs <- compileShader fsname fscode GL_FRAGMENT_SHADER
   pro <- glCreateProgram
   glAttachShader pro vs
   glAttachShader pro fs
@@ -111,15 +111,17 @@ useShader (Shader i) = glUseProgram i
 
 
 -- Texture
-pictureToTex :: DynamicImage -> IO Tex
+pictureToTex :: DynamicImage -> IO (Tex,Int2)
 pictureToTex di = action where
   action = case di of
     ImageRGBA8 (Image w h pixVec) -> do
       V.unsafeWith pixVec $ \ptr -> do
-        newTexture GL_RGBA ptr w h
+        tex <- newTexture GL_RGBA ptr w h
+        return (tex, I2 w h)
     ImageRGB8 (Image w h pixVec) -> do
       V.unsafeWith pixVec $ \ptr -> do
-        newTexture GL_RGB ptr w h
+        tex <- newTexture GL_RGB ptr w h
+        return (tex, I2 w h)
     _ -> do
       putStrLn "unsupported format"
       exitFailure
@@ -139,6 +141,8 @@ newTexture format ptr w h = do
     GL_UNSIGNED_BYTE -- image data type 
     (castPtr ptr)
   glGenerateMipmap GL_TEXTURE_2D
+  glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
+  glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_NEAREST
   return (Tex n)
 
 newBlankTexture :: Int -> Int -> IO Tex
@@ -204,6 +208,9 @@ setUniform3f :: GLint -> Float -> Float -> Float -> IO ()
 setUniform3f ul x y z =
   withArray [x,y,z] $ \ptr -> glUniform3fv ul 1 ptr
 
+setUniform4f :: GLint -> Float -> Float -> Float -> Float -> IO ()
+setUniform4f ul x y z w =
+  withArray [x,y,z,w] $ \ptr -> glUniform4fv ul 1 ptr
 
 -- rendering
 renderQuad :: IO ()

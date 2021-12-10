@@ -20,6 +20,8 @@ import Performance
 type Ruler = IO Float2
 
 
+-- common graphics resources (tile, sheets, font, paint)
+-- surface though isn't common enough
 data Graphics = Graphics
   { gfxTile :: VBO
   , gfxDung :: Tex
@@ -27,8 +29,8 @@ data Graphics = Graphics
   , gfxPaint1 :: Paint UL1
   , gfxPaint2 :: Paint UL2
   , gfxPaint3 :: Paint UL1 -- straight paint
-  , gfxSurf1 :: Tex
-  , gfxFBO1 :: FBO
+  , gfxSurf1 :: Tex -- move out
+  , gfxFBO1 :: FBO  -- move out
   }
 
 loadGfx :: IO Graphics
@@ -45,6 +47,12 @@ loadGfx = do
     pure paint3 <*>
     pure surf <*>
     pure fbo
+
+
+
+gfxToTextTool :: Graphics -> TextTool
+gfxToTextTool Graphics{gfxTile=tile,gfxFont=font,gfxPaint2=paint,gfxFBO1=fbo} =
+  newTextTool tile font paint fbo
 
 forgeTools :: Ruler -> Graphics -> IO (SpriteTool, TextTool, Slapper)
 forgeTools ruler Graphics{gfxTile=vbo,gfxDung=dung,gfxFont=font,gfxPaint1=paint1,gfxPaint2=paint2,gfxPaint3=paint3,gfxSurf1=surf,gfxFBO1=fbo} = do
