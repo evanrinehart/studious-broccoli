@@ -1,4 +1,4 @@
-module Console where
+module CmdLine where
 
 import Control.Monad.RWS
 import Data.Maybe
