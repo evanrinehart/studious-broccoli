@@ -61,3 +61,19 @@ instance Monoid Act where
 
 instance Semigroup Act where
   Act a <> Act b = Act (a >> b)
+
+onFst :: (a -> c) -> (a,b) -> (c,b)
+onFst f (x,y) = (f x, y)
+onSnd :: (b -> c) -> (a,b) -> (a,c)
+onSnd f (x,y) = (x,f y)
+
+deleteAt :: Int -> [a] -> [a]
+deleteAt 0 (x:xs) = xs
+deleteAt i (x:xs) = x : deleteAt (i-1) xs
+deleteAt _ [] = error "index out of bounds"
+
+insertAt :: Int -> a -> [a] -> [a]
+insertAt 0 z (x:xs) = z : x : xs
+insertAt i z (x:xs) = x : insertAt (i-1) z xs
+insertAt 0 z [] = [z]
+insertAt i z [] = error "index out of bounds"

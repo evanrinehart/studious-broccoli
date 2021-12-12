@@ -1,14 +1,61 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE BlockArguments #-}
 module CmdLine where
 
 import Control.Monad.RWS
-import Data.Maybe
 
 import Common 
 import Event
-import U
 
-import TextCtrl
+type S = (Int,String)
 
+cmdLine :: UserActions (S -> (S, Maybe String))
+cmdLine = runUA $ (pure (pure ()))
+  { uaTyping   = charIn
+  , uaKeydown  = keydown
+  , uaKeyagain = keydown }
+
+type CmdLine a = RWS () (Maybe String) S a
+
+keydown :: KB -> a -> CmdLine ()
+keydown k _ = case k of
+  KBHome -> setCur 0
+  KBEnd -> setCur =<< bufLen
+  KBBackspace -> curEdit (\(l,r) -> (drop 1 l, r))
+  KBLeft -> curEdit \case
+    (""  ,bs) -> ("",bs)
+    (a:as,bs) -> (as,a:bs)
+  KBRight -> curEdit \case
+    (as,"")   -> (as,"")
+    (as,b:bs) -> (b:as,bs)
+  KBEnter -> do
+    buf <- gets snd
+    tell (Just buf)
+    put (0,"")
+  _ -> return ()
+
+charIn :: Char -> CmdLine ()
+charIn c = curEdit (\(as,bs) -> (c:as, bs))
+
+curEdit :: ((String,String) -> (String,String)) -> CmdLine ()
+curEdit edit = modify $ \(i,buf) ->
+  let ab = split i buf in
+  let (c,d) = edit ab in
+  (length c, reverse c ++ d)
+
+setCur :: Int -> CmdLine ()
+setCur i = modify $ onFst (const i)
+getCur :: CmdLine Int
+getCur = gets fst
+bufLen = gets (length . snd)
+
+split :: Int -> String -> (String,String)
+split i s = go i "" s where
+  go 0 as bs = (as,bs)
+  go i as (b:bs) = go (i-1) (b:as) bs
+  go i as [] = (as,[])
+
+{-
 type ConsoleM = RWS () (Maybe String) (Int,String)
 
 -- when an event makes it through, update the cmdLine, notify
@@ -31,18 +78,6 @@ cmdLine rawE = (updateE, commandE) where
   selfV :: V (Int,String)
   selfV = hold (0,"") updateE
 
--- RWS subprogram for the console
-runControl :: TextCtrl -> (Int,String) -> ((Int,String),Maybe String)
-runControl ctrl (i,buf) = execRWS go () (i,buf) where
-  go = case ctrl of
-    PutChar c -> insert c >> moveRight
-    Backspace -> moveLeft >> erase
-    MoveLeft  -> moveLeft
-    MoveRight -> moveRight
-    Home -> goHome
-    End  -> goEnd
-    Enter -> execute buf >> returnAndClearAll
-    _ -> return ()
 
 goHome = modify (\(i,buf) -> (0, buf))
 goEnd = do
@@ -91,4 +126,7 @@ moveRight = do
   modify $ \(i,buf) -> (min l (i+1), buf)
 
 returnAndClearAll = modify (\(i,buf) -> (0,""))
+-}
+
+
 

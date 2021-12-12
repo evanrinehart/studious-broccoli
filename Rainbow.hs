@@ -44,8 +44,8 @@ data ImageException = ImageException String String deriving Show
 instance Exception ImageException
 
 -- load gfx stuff
-rainbow winW winH scale var = do
-  (win,physDims,logiDims) <- glfwRitual winW winH scale var
+rainbow winW winH scale = do
+  (win,physDims,logiDims) <- glfwRitual winW winH scale
   tile <- loadBasicTile
   (font,_) <- loadTextureFromFile "cozette.png"
   spritePaint <- loadSpritePaint tile
@@ -199,8 +199,8 @@ withFont gfx cnv action = do
     let fh = fi h
     let sx = fi $ 2 * w * (glyph `mod` 40) + 42
     let sy = fi $ h * (glyph `div` 40) + 42
-    let dx = fi (i * w) - (fi cw / 2) + 2
-    let dy = fi (j * h) - (fi ch / 2) + 8
+    let dx = fi (i * w) - (fi cw / 2) + 1
+    let dy = fi (j * h) - (fi ch / 2) - 2
     configUniforms uniforms $
       Field @"winWH" d >:
       Field @"srcXYWH" (F4 sx sy fw fh) >:
@@ -249,7 +249,7 @@ withSprites gfx sheet cnv action = do
 
 
 -- takes logical window size
-glfwRitual w h scale var = do
+glfwRitual w h scale = do
   GLFW.setErrorCallback $ Just $ \err msg -> do
     GLFW.terminate
     throwIO (GLFWException err msg)
@@ -269,25 +269,27 @@ glfwRitual w h scale var = do
   physDims <- newIORef $ I2 (scale * w) (scale * h)
   logiDims <- newIORef $ F2 (fi w) (fi h)
 
-  let push :: Event -> IO ()
-      push e = do
-        modifyIORef' var (e:)
-
   let r2f = realToFrac
   GLFW.setWindowSizeCallback win $ Just $ \win w h -> do
     print ("window resize", w, h)
-    push (WinSize w h)
   GLFW.setFramebufferSizeCallback win $ Just $ \win w h -> do
     print ("fb resize", w, h)
     writeIORef physDims (I2 w h)
     glViewport 0 0 (fi w) (fi h)
-  GLFW.setKeyCallback win $ Just $ \win key n state mods -> do
-    push (translateGLFWKey key state mods)
-  GLFW.setCharCallback win $ Just $ \win c -> push (Typing c)
-  GLFW.setMouseButtonCallback win $ Just $ \win button state mods -> case state of
-    GLFW.MouseButtonState'Pressed  -> push (MouseClick (fromEnum button))
-    GLFW.MouseButtonState'Released -> push (MouseUnclick (fromEnum button))
-  GLFW.setCursorPosCallback win $ Just $ \win x y -> push (MouseMotion (r2f x) (r2f y))
-  GLFW.setScrollCallback win $ Just $ \win dx dy -> push (Scroll (r2f dx) (r2f dy))
 
   return (win, physDims, logiDims)
+
+jackIn win actions = do
+  GLFW.setKeyCallback win $ Just $ \win key n state mods -> do
+    let k = translateGLFWKey key
+    let m = translateGLFWMods mods
+    case state of
+      GLFW.KeyState'Pressed -> uaKeydown actions k m
+      GLFW.KeyState'Released -> uaKeyup actions k m
+      GLFW.KeyState'Repeating -> uaKeyagain actions k m
+  GLFW.setCharCallback win $ Just $ \win c -> uaTyping actions c
+  GLFW.setMouseButtonCallback win $ Just $ \win button state mods -> case state of
+    GLFW.MouseButtonState'Pressed  -> uaClick actions (fromEnum button)
+    GLFW.MouseButtonState'Released -> uaClick actions (fromEnum button)
+  GLFW.setCursorPosCallback win $ Just $ \win x y -> uaMouse actions (realToFrac x) (realToFrac y)
+  GLFW.setScrollCallback win $ Just $ \win dx dy -> uaScroll actions (realToFrac dx) (realToFrac dy)

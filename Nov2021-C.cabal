@@ -18,7 +18,7 @@ extra-source-files:  CHANGELOG.md
 
 executable Nov2021-C
   main-is:             Main.hs
-  other-modules:       Console, Glue, Ticks,
+  other-modules:       Glue, Ticks, CmdLine,
                        TextMode, Common, Event, Rainbow,
                        Paint, HList, U, Performance,
                        TextCtrl, Audio
