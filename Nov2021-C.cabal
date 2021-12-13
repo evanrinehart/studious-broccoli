@@ -19,9 +19,9 @@ extra-source-files:  CHANGELOG.md
 executable Nov2021-C
   main-is:             Main.hs
   other-modules:       Glue, Ticks, CmdLine,
-                       TextMode, Common, Event, Rainbow,
+                       Common, Event, Rainbow,
                        Paint, HList, U, Performance,
-                       TextCtrl, Audio
+                       TextCtrl, Audio, CardGame
   -- other-extensions:
   build-depends:       base < 5, GLFW-b, gl, vector, JuicyPixels, containers,
                        random, clock, mtl, comonad, vector, text, sdl2, stm,

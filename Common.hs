@@ -2,7 +2,7 @@
 module Common where
 
 import Data.Vector.Storable as V (Vector, fromList)
-import Graphics.GL
+--import Graphics.GL
 
 data Int2 = I2 !Int !Int deriving Show
 data Float2 = F2 !Float !Float deriving Show
@@ -12,11 +12,6 @@ data Rect a = Rect !a !a !a !a
 type RGB = Float3
 
 newtype Glyph = Glyph Int
-
-white   = F3 1 1 1
-black   = F3 0 0 0
-red     = F3 1 0 0
-yellow  = F3 1 1 0
 
 fi :: (Integral a, Num b) => a -> b
 fi = fromIntegral
@@ -37,22 +32,9 @@ tileData =
   let d = [1, 0] in
   V.fromList (concat [c,d,b,b,a,c])
 
-{-
-data ULegend1 = UL1
-  { ul1WinWH :: GLint
-  , ul1SrcXY :: GLint
-  , ul1SrcWH :: GLint
-  , ul1DstXY :: GLint
-  , ul1DstWH :: GLint }
--}
 
-type UL1 =
-  ['("winWH", Float2)
-  ,'("srcXY", Float2)
-  ,'("srcWH", Float2)
-  ,'("dstXY", Float2)
-  ,'("dstWH", Float2)]
-
+  --let box = 33 + 40 * 35 + 30 + 369
+  --darkbox = 33 + 40 * 35 + 29
 
 newtype Act = Act (IO ())
 

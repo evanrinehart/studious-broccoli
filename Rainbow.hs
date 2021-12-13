@@ -44,8 +44,8 @@ data ImageException = ImageException String String deriving Show
 instance Exception ImageException
 
 -- load gfx stuff
-rainbow winW winH scale = do
-  (win,physDims,logiDims) <- glfwRitual winW winH scale
+rainbow title winW winH scale = do
+  (win,physDims,logiDims) <- glfwRitual title winW winH scale
   tile <- loadBasicTile
   (font,_) <- loadTextureFromFile "cozette.png"
   spritePaint <- loadSpritePaint tile
@@ -83,6 +83,11 @@ newCanvas w h = do
     else return ()
   useFBO (FBO 0)
   return Canvas{canvasWH=I2 w h, canvasTex=surf, canvasFbo=fbo}
+
+deleteCanvas :: Canvas -> IO ()
+deleteCanvas canvas = do
+  deleteFBO (canvasFbo canvas)
+  deleteTexture (canvasTex canvas)
 
 blitCanvas :: GFX -> Canvas -> Float2 -> IO ()
 blitCanvas gfx cnv (F2 x y) = do
@@ -249,7 +254,7 @@ withSprites gfx sheet cnv action = do
 
 
 -- takes logical window size
-glfwRitual w h scale = do
+glfwRitual title w h scale = do
   GLFW.setErrorCallback $ Just $ \err msg -> do
     GLFW.terminate
     throwIO (GLFWException err msg)
@@ -261,7 +266,7 @@ glfwRitual w h scale = do
   GLFW.windowHint (GLFW.WindowHint'OpenGLForwardCompat True)
   GLFW.windowHint (GLFW.WindowHint'OpenGLProfile GLFW.OpenGLProfile'Core)
 
-  Just win <- GLFW.createWindow (scale * w) (scale * h) ":D" Nothing Nothing 
+  Just win <- GLFW.createWindow (scale * w) (scale * h) title Nothing Nothing 
   GLFW.makeContextCurrent (Just win)
 
   cullBackFaces -- debug only
@@ -290,6 +295,15 @@ jackIn win actions = do
   GLFW.setCharCallback win $ Just $ \win c -> uaTyping actions c
   GLFW.setMouseButtonCallback win $ Just $ \win button state mods -> case state of
     GLFW.MouseButtonState'Pressed  -> uaClick actions (fromEnum button)
-    GLFW.MouseButtonState'Released -> uaClick actions (fromEnum button)
-  GLFW.setCursorPosCallback win $ Just $ \win x y -> uaMouse actions (realToFrac x) (realToFrac y)
+    GLFW.MouseButtonState'Released -> uaUnclick actions (fromEnum button)
+  GLFW.setCursorPosCallback win $ Just $ \win x y -> do
+    uaMouse actions (realToFrac x) (realToFrac y)
+{-
+    (w,h) <- GLFW.getWindowSize win
+    let halfW = fi (w `div` 2)
+    let halfH = fi (h `div` 2)
+    uaMouse actions (realToFrac x - halfW) (halfH - realToFrac y)
+-}
   GLFW.setScrollCallback win $ Just $ \win dx dy -> uaScroll actions (realToFrac dx) (realToFrac dy)
+
+

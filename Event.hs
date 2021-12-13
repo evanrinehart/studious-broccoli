@@ -25,7 +25,7 @@ data KB
   | KBPageUp | KBPageDown
   | KBDelete | KBHome | KBEnd
   | KBEnter | KBTab
-  | KBSpace
+  | KBSpace | KBNumPlus
   | KBOther String
       deriving Show
 
@@ -84,6 +84,7 @@ translateGLFWKey k = case k of
   Key'Enter -> KBEnter
   Key'Escape -> KBEscape
   Key'Space -> KBSpace
+  Key'PadAdd -> KBNumPlus
   _ -> KBOther (show k)
 
 isEscape :: Event -> Bool

@@ -212,6 +212,16 @@ setUniform4f :: GLint -> Float -> Float -> Float -> Float -> IO ()
 setUniform4f ul x y z w =
   withArray [x,y,z,w] $ \ptr -> glUniform4fv ul 1 ptr
 
+-- object disposal
+deleteTexture :: Tex -> IO ()
+deleteTexture (Tex n) = do
+  withArray [n] $ \ptr -> glDeleteTextures 1 ptr
+
+deleteFBO :: FBO -> IO ()
+deleteFBO (FBO n) = do
+  withArray [n] $ \ptr -> glDeleteFramebuffers 1 ptr
+  
+
 -- rendering
 renderQuad :: IO ()
 renderQuad = do
