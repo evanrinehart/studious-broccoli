@@ -7,21 +7,25 @@ import Text.Printf
 
 import Data.Map as M (Map, fromList, toList, lookup)
 import Data.IntMap.Strict as IM
-  (IntMap, elems, keysSet, fromList, assocs, foldl', filter, minView, minViewWithKey,
-  mapMaybeWithKey, mapWithKey, withoutKeys, restrictKeys, singleton, insert, (\\))
+  (IntMap, elems, keysSet, fromList, assocs, filter, minView, minViewWithKey,
+  mapMaybeWithKey, mapWithKey, mapMaybe, withoutKeys, restrictKeys, singleton, insert, (\\))
 import Data.IntSet as IS
   (IntSet, singleton)
 import Data.List hiding ((\\))
 import Data.Maybe
 import Data.Function
+import Data.Foldable
 
 import Debug.Trace
+
+import Control.Exception
+import Control.Concurrent
 
 import Common
 
 -- an extended geometric path on the plane, carries label and payload
-data Elem a = RuleAB Float2 Float2 Int a
-            | Circle Float2 Float Int a
+data Elem = RuleAB Float2 Float2 Int
+          | Circle Float2 Float Int
   deriving Show
 
 -- microsurface view, either 1 normal or 2, refers to elements involved
@@ -33,159 +37,100 @@ microElems :: Micro -> IntSet
 microElems (Flat _ es) = es
 microElems (Corner _ _ es) = es
   
+type Elements = IntMap Elem
+
 -- special microsites to augment the natural flats of elements
 type MicroMap = [(Float2, Micro)]
 
 
-data SpaceTimePoint a = STP !Float !Float2 !a
+data SpaceTimePoint a = STP !Float !Float2 a
   deriving Show
 
-type Hit = SpaceTimePoint ()
-collisionTest :: Float2 -> Float2 -> Elem a -> Maybe Hit
-collisionTest x v element = fmap g answerMaybe where
-  answerMaybe = case element of
-    RuleAB la lb _ _ -> particleHitsLineIn x v la lb
-    Circle c r _ _   -> particleHitsCircleIn x v c r
-  g dt = let x' = uniform dt x v in STP dt x' ()
+type Hit = SpaceTimePoint Elem
+collisionTest :: Float2 -> Float2 -> Elem -> Maybe Hit
+collisionTest x v el = fmap g (answerMaybe el) where
+  answerMaybe (RuleAB la lb _) = particleHitsLineIn x v la lb
+  answerMaybe (Circle c r _)   = particleHitsCircleIn x v c r
+  g dt = let x' = uniform dt x v in STP dt x' el
 
-willHitElements :: Float2 -> Float2 -> IntMap (Elem a) -> IntMap Hit
-willHitElements x v = IM.mapMaybeWithKey (\i sh -> collisionTest x v sh)
-
-findHitTime :: IntMap Hit -> Float
-findHitTime = IM.foldl' (\least (STP t _ _) -> min least t) (1/0)
-
-findHitLocation :: Float -> IntMap Hit -> Float2
-findHitLocation t hits =
-  let STP _ x _ = head (Prelude.filter (\(STP s _ _) -> s==t) (IM.elems hits)) in x
-
+-- velocity reflects according to surface normal(s)
 microInteraction :: Micro -> Float2 -> Float2
 microInteraction (Flat n _) v = reflect n v
 microInteraction (Corner n1 n2 _) v = reflect n1 (reflect n2 v)
 
-microLookup :: MicroMap -> IntMap (Elem a) -> Float2 -> Micro
-microLookup mm shapes x = case find (\(y,_) -> norm (x - y) <= 0.001) mm of
-  Just (_,u)  -> u
-  Nothing -> case IM.minViewWithKey (elemsWithin shapes x 0.001) of
-    Just ((i,el),rest) -> case IM.minView rest of
-      Nothing -> Flat (normalize $ normalToElementAt el x) (IS.singleton i)
-      Just _  -> error "microLookup failed (multiple shapes)"
-    Nothing -> error $ "microLookup failed (nothing at " ++ show x ++ ")"
+getMicrosite :: MicroMap -> Float2 -> Maybe Micro
+getMicrosite mm x = fmap snd $ find (\(y,_) -> norm (x-y) <= 0.001) mm
 
-elemsWithin :: IntMap (Elem a) -> Float2 -> Float -> IntMap (Elem a)
-elemsWithin shapes searchC searchR = IM.filter f shapes where
-  f (RuleAB a b _ _) =
-    let x = closestPointOnLine searchC a b in
-    let d = norm (searchC - x) in
-    if d < searchR
-      then let s = lineSegmentParam x a b in 0 <= s && s <= 1
-      else False
-  f (Circle c r _ _) = let d = norm (c - searchC) in r - searchR < d && d < r + searchR
-  
+-- an elem has a flat surface unless micromap indicates unusual feature here
+overlay :: Elem -> MicroMap -> Float2 -> Micro
+overlay el mm x = case getMicrosite mm x of
+  Nothing -> Flat (normalize $ normalToElementAt el x) (IS.singleton (elementNo el))
+  Just u  -> u
+
+type MicroHit = SpaceTimePoint Micro
+-- fire the test beam into the geometry.
+-- If it hits within the time limit return hit details (time, place, microsurface)
+microBeam :: Elements -> MicroMap -> Float2 -> Float2 -> Float -> Maybe MicroHit
+microBeam shapes mm x v limit =
+  let noHit = STP (1/0) (F2 0 0) (error "(bug) microBeam placeholder") in
+  let allHits = IM.mapMaybe (collisionTest x v) shapes in
+  let soonest@(STP t _ _) = foldl h noHit allHits in
+  if t > limit
+    then Nothing
+    else Just soonest
+      where
+        -- minimize time and analyze surface
+        h acc@(STP least _ _) (STP t x el)
+          | t < least = STP t x (overlay el mm x)
+          | otherwise = acc
 
 -- a particle is either in free flight or is in the process of colliding
 data Particle
   = FParticle Float2 Float2 -- x v
   | CParticle Float2 Float2 Float2 IntSet -- x v0 v1 elements
       deriving Show
+
 type CE = SpaceTimePoint IntSet
 
-particle :: IntMap (Elem a) -> MicroMap -> Particle -> Float -> (Particle, [CE])
-particle shapes mm p t1 = go 0 [] p where
-  go t accum (FParticle x v)        = go2 t accum x v shapes
-  go t accum (CParticle x v0 v1 cc) = go2 t (STP t x cc : accum) x v1 (shapes `IM.withoutKeys` cc)
+particle :: Elements -> MicroMap -> Particle -> Float -> (Particle, [CE])
+particle allElements mm p t1 = go 0 [] p where
+  go t accum (FParticle x v)        = go2 t accum x v allElements
+  go t accum (CParticle x v0 v1 cs) = go2 t (STP t x cs : accum) x v1 (allElements `IM.withoutKeys` cs)
 
-  go2 :: Float -> [CE] -> Float2 -> Float2 -> IntMap (Elem a) -> (Particle, [CE])
-  go2 t accum x v ss =
-    let allHits = willHitElements x v ss in -- give a time delta for xv to hit
-    let dt = findHitTime allHits in
-    let t' = t + dt in
-    -- if dt is zero, we're stuck
-    let vsLimit = compare t' t1 in
-    case vsLimit of
-      GT ->
-        let x' = uniform (t1 - t) x v in
-        (FParticle x' v, accum)
-      _ ->
-        let hitX = findHitLocation dt allHits in
-        let u = microLookup mm shapes hitX in
-        let v' = microInteraction u v in
-        let es = microElems u in
-        let ce = STP t' hitX es in
-        case vsLimit of
-          LT -> go t' accum (CParticle hitX v v' es)
-          EQ -> (CParticle hitX v v' es, accum)
+  go2 :: Float -> [CE] -> Float2 -> Float2 -> Elements -> (Particle, [CE])
+  go2 t accum x v targets = case microBeam targets mm x v t1 of
+    Nothing -> 
+      let x' = uniform (t1 - t) x v in
+      (FParticle x' v, accum)
+    Just (STP dt hitX u) ->
+      let t' = t + dt in
+      let v' = microInteraction u v in
+      let es = microElems u in
+      let ce = STP t' hitX es in
+      if t' < t1
+        then go t' accum (CParticle hitX v v' es)
+        else (CParticle hitX v v' es, accum)
 
 particlePosition :: Particle -> Float2
 particlePosition (FParticle x _) = x
 particlePosition (CParticle x _ _ _) = x
 
+elementNo :: Elem -> Int
+elementNo (RuleAB _ _ i) = i
+elementNo (Circle _ _ i) = i
 
-
-
--- to avoid recognizing microenvironments at runtime, construct the
--- level out of (a way to generate) collision surfaces.
--- i.e. Float2 -> CollisionSurface
--- this can be a two level lookup. If xy is within the location of
--- an unusual collision surface, return that. Otherwise return simple surface.
--- Otherwise, there is no collision surface nearby, and that's a bug.
--- continuity principle: as the point along a shape moves, the collision surface
--- may change discontinuously but the result of hitting there should change smoothly.
-
-
-
--- level: set of unusual locations, set of shapes
--- "compiler" that generates this data from block locations and level walls
-
-
--- assuming the set of shapes is not empty
--- and xy is generally on all the surfaces
--- and the pattern of coincident shapes is supported
---simplifyMicrosurface :: IntMap Shape -> Float2 -> CollisionSurface
---simplifyMicrosurface shapes xy = 
-
-
-
---collisionSurfaceAt :: IntMap Shape -> Float2 -> Float -> Maybe CollisionSurface
---collisionSurfaceAt shapes c r = 
-
-
-
-{-
-particleFuture :: IntMap Shape -> Particle -> [CE]
-particleFuture shapes p0 = concat (go p0) where
-  go p = let (p', ces) = particle shapes p 1 in ces : go p'
--}
-
-printParticleFuture :: IntMap (Elem a) -> MicroMap -> Particle -> IO ()
+printParticleFuture :: IntMap Elem -> MicroMap -> Particle -> IO ()
 printParticleFuture shapes mm p0 = go p0 where
   go :: Particle -> IO ()
   go p =
-    let (p', ces) = particle shapes mm p 0.5 in do
+    let (p', ces) = particle shapes mm p 1 in do
     let F2 x y = particlePosition p'
     let no = length ces
-    printf "%4f %4f %d\n" x y no
+    print (p', ces)
+    --printf "%6.3f %6.3f %d\n" x y no
+    threadDelay 1000000
     --print (p', ces)
     go p'
-
-{-
--- 
-testManyShapes :: Float2 -> Float2 -> ShapeSet -> Maybe (Float, Float2, ShapeSet)
-testManyShapes x v ss = collectWinnings $ catMaybes $ map h (IM.toList ss) where
-  ctw x v i sh = fmap g (collisionTest x v sh) where
-    g (t,x') = (t, i, sh, normalToElementAt sh x')
-  h (i,sh) = ctw x v i sh
-
--- take the winning collisions, if any
--- return their time, net normal, and shape set
-collectWinnings :: [(Float,Int,Shape,Float2)] -> Maybe (Float, Float2, ShapeSet)
-collectWinnings [] = Nothing
-collectWinnings ((t,i0,sh0,n0):more) = go n0 (IM.singleton i0 sh0) more where
-  go !accum !set ((u,i,sh,n):xs)
-    | u /= t    = Just (t, normalize accum, set)
-    | otherwise = go (n + accum) (IM.insert i sh set) xs
-  go !accum !set [] = Just (t, normalize accum, set)
-
--}
 
 
 
@@ -281,8 +226,8 @@ particleHitsCircleIn x v c r = case timeUntilCircle x v c r of
 normalize x = x ./ norm x
 
 -- not normalized. circles normal points out. S to N line normal points east.
-normalToElementAt (RuleAB la lb _ _) _ = lineNormal la lb
-normalToElementAt (Circle c r _ _) x = x - c
+normalToElementAt (RuleAB la lb _) _ = lineNormal la lb
+normalToElementAt (Circle c r _) x = x - c
 
 lineNormal la lb = let F2 x y = lb - la in F2 y (-x)
 
@@ -326,12 +271,12 @@ infixl 7 *.
 
 -- test data
 
-box :: a -> IntMap (Elem a)
-box x = IM.fromList [(0, l), (1, t), (2, r), (3, bb)] where
-  l = RuleAB a b 0 x
-  t = RuleAB b c 1 x
-  r = RuleAB c d 2 x
-  bb = RuleAB d a 3 x
+box :: IntMap Elem
+box = IM.fromList [(0, l), (1, t), (2, r), (3, bb)] where
+  l = RuleAB a b 0
+  t = RuleAB b c 1
+  r = RuleAB c d 2
+  bb = RuleAB d a 3
   a = F2 0 0
   b = F2 0 10
   c = F2 10 10
@@ -352,6 +297,11 @@ corners = [(a,c1),(b,c2),(c,c3),(d,c4)] where
   nd = normalize $ lineNormal b c
   nl = normalize $ lineNormal c d
 
+
+-- errors. They should only happen in case of a bug.
+
+data ArkanoidException = ArkanoidException String deriving Show
+instance Exception ArkanoidException
 
 -- future 
 
