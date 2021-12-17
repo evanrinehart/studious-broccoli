@@ -21,6 +21,7 @@ import Glue
 import Event
 import Ticks
 import Rainbow
+import Audio
 
 import CmdLine
 
@@ -65,7 +66,7 @@ makeArena gfx (F4 x y w h) = do
   let actionWrapper = -- some of this is common to all widgets, foo is "custom"
         shiftMouse shift .  -- shift mouse a fixed amount
         cacheMouse var2 .   -- cache mouse locations to ref, provide mouse location
-        foo .            -- remap useractions to cardgame actions, always require mouse location
+        CardGame.foo .      -- remap useractions to cardgame actions, always require mouse location
         cachedState var1 -- IORef s + s->s = IO ()  (inner action API)
   let render gfx canvas sheet cards = do
         withSprites gfx sheet canvas $ \torch -> do
@@ -77,7 +78,7 @@ makeArena gfx (F4 x y w h) = do
     widgetCanvas=canvas,
     widgetTime=return (),
     widgetArea=F4 x y w h,
-    widgetActions=actionWrapper basicGame,
+    widgetActions=actionWrapper CardGame.basicGame,
     widgetFinalize=deleteCanvas canvas
   }
 
@@ -103,13 +104,13 @@ blitWidget gfx wid = let F4 x y _ _ = widgetArea wid in blitCanvas gfx (widgetCa
 --   a canvas (texture, fbo)
 --   an ioref with the current state
 
-makeDebugger gfx = do
-  canvas <- newCanvas 320 480
+makeDebugger gfx (F4 x y w h) = do
+  canvas <- newCanvas (floor w) (floor h)
   var <- newIORef (0,"")
   return $ Widget{
     widgetCanvas=canvas,
     widgetFinalize=deleteCanvas canvas,
-    widgetArea=F4 (-320) (-240) 320 480,
+    widgetArea=F4 x y w h,
     widgetTime=return (),
     widgetRepaint=do
       (cur,buf) <- readIORef var
@@ -129,6 +130,37 @@ makeDebugger gfx = do
     widgetActions=
       cacheStateDoMsg var (fromMaybe (return ()) . fmap print) cmdLine
   }
+
+
+-- how to make actions that find actions using io and use them
+
+dynamicActions :: UserActions (IO (UserActions (IO a))) -> UserActions (IO a)
+dynamicActions uaua = UserActions
+    { uaKeydown  = \x y -> uaKeydown uaua x y >>= \ua -> uaKeydown ua x y
+    , uaKeyup    = \x y -> uaKeyup uaua x y   >>= \ua -> uaKeyup ua x y
+    , uaKeyagain = \x y -> uaKeyagain uaua x y >>= \ua -> uaKeyagain ua x y
+    , uaTyping   = \x   -> uaTyping uaua x    >>= \ua -> uaTyping ua x
+    , uaMouse    = \x y -> uaMouse uaua x y   >>= \ua -> uaMouse ua x y
+    , uaClick    = \x   -> uaClick uaua x     >>= \ua -> uaClick ua x
+    , uaUnclick  = \x   -> uaUnclick uaua x   >>= \ua -> uaUnclick ua x
+    , uaScroll   = \x y -> uaScroll uaua x y  >>= \ua -> uaScroll ua x y }
+
+actOnWidgets :: IORef [Widget] -> UserActions (IO ())
+actOnWidgets ref = dynamicActions ok where
+  ok :: UserActions (IO (UserActions (IO ())))
+  ok = pure g
+  g :: IO (UserActions (IO ()))
+  g = do
+    acts <- fmap (map widgetActions) (readIORef ref)
+    let noop = return ()
+    return $ foldl (liftA2 (>>)) (pure noop) acts
+    
+makeRoot :: [Widget] -> IO (UserActions (IO ()))
+makeRoot ws = do
+  var <- newIORef ws
+  return $ actOnWidgets var
+
+
 
 
 
@@ -164,16 +196,17 @@ mainAction win arena debugger = root (pair a b) where
   noop = return ()
 
 main = do
+  (dev,bang) <- setupAudio
+
   let scale = 1
   -- let there be a window plus graphics
   (win,gfx) <- rainbow "o_O" (floor logicalW) (floor logicalH) scale -- create window load graphics
 
-  debugger <- makeDebugger gfx
+  debugger <- makeDebugger gfx (F4 (-320) (-240) 640 480)
   arena    <- makeArena gfx (F4 (-320) (-240) 640 480)
   --anim     <- makeAnimation gfx
 
---  masterActionVar <- newIORef undefined
---  writeIORef masterActionVar act
+  --globalMouseTranslator win . quitOnEscape win
 
   -- let there be a connection between the user and... something
   jackIn win (mainAction win arena debugger)
@@ -199,6 +232,8 @@ main = do
     mlDead=GLFW.windowShouldClose win
   }
 
+  teardownAudio dev
+
 
 {-
 masterAction :: IORef (UserActions (IO ())) -> UserActions (IO ())
@@ -218,6 +253,14 @@ quitter win orig = orig{uaKeydown = g} where
   g key mods = do
     case key of
       KBEscape -> GLFW.setWindowShouldClose win True
+      _        -> return ()
+    uaKeydown orig key mods
+
+banger :: IO () -> UserActions (IO ()) -> UserActions (IO ())
+banger bang orig = orig{uaKeydown = g} where
+  g key mods = do
+    case key of
+      KBSpace  -> bang
       _        -> return ()
     uaKeydown orig key mods
 

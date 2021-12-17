@@ -319,7 +319,7 @@ openVorbSmart path = do
     _ -> error "How many channels does this vorbis file have? (not 1 or 2)"
 
 
-setupAudio :: IO AudioDevice
+--setupAudio :: IO AudioDevice
 setupAudio = do
 {-
   ds <- fmap VV.toList SDL.getAudioDrivers
@@ -343,6 +343,7 @@ setupAudio = do
         let t = Tape 0 (V.length chunk) chunk
         atomically (takeTMVar tapesV >>= putTMVar tapesV . (t:))
 
+  {-
   forkIO $ do
     threadDelay (3 * 1000000)
     insertTape
@@ -358,6 +359,7 @@ setupAudio = do
   forkIO $ do
     threadDelay (7 * 1000000)
     insertTape
+  -}
 
   
 
@@ -387,7 +389,7 @@ setupAudio = do
 --  printf "samples = %d\n" (audioSpecSamples spec)
   printf "size = %d\n" (audioSpecSize spec)
 
-  return dev
+  return (dev,insertTape)
 
 
 teardownAudio :: AudioDevice -> IO ()

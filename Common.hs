@@ -5,7 +5,7 @@ import Data.Vector.Storable as V (Vector, fromList)
 --import Graphics.GL
 
 data Int2 = I2 !Int !Int deriving Show
-data Float2 = F2 !Float !Float deriving Show
+data Float2 = F2 !Float !Float deriving (Eq,Ord,Show)
 data Float3 = F3 !Float !Float !Float deriving Show
 data Float4 = F4 !Float !Float !Float !Float deriving Show
 data Rect a = Rect !a !a !a !a
@@ -50,7 +50,7 @@ onSnd :: (b -> c) -> (a,b) -> (a,c)
 onSnd f (x,y) = (x,f y)
 
 deleteAt :: Int -> [a] -> [a]
-deleteAt 0 (x:xs) = xs
+deleteAt 0 (_:xs) = xs
 deleteAt i (x:xs) = x : deleteAt (i-1) xs
 deleteAt _ [] = error "index out of bounds"
 
@@ -58,4 +58,13 @@ insertAt :: Int -> a -> [a] -> [a]
 insertAt 0 z (x:xs) = z : x : xs
 insertAt i z (x:xs) = x : insertAt (i-1) z xs
 insertAt 0 z [] = [z]
-insertAt i z [] = error "index out of bounds"
+insertAt _ _ [] = error "index out of bounds"
+
+instance Num Float2 where
+  F2 a b + F2 c d = F2 (a+c) (b+d)
+  F2 a b - F2 c d = F2 (a-c) (b-d)
+  negate (F2 a b) = F2 (negate a) (negate b)
+  _ * _ = error "can't times Float2, use dot or *."
+  abs _ = error "can't abs Float2"
+  signum _ = error "can't signum Float2"
+  fromInteger i = F2 (fromInteger i) (fromInteger i)
