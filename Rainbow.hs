@@ -21,7 +21,9 @@ import HList
 data PaintShop = PS
   { psSprite :: Paint SpriteUniforms
   , psPrism  :: Paint SpriteUniforms
-  , psGlyph  :: Paint GlyphUniforms }
+  , psGlyph  :: Paint GlyphUniforms
+  , psDisc   :: Paint DiscUniforms
+  , psBlock  :: Paint BlockUniforms }
 
 data GFX = GFX
   { gfxTile :: VBO
@@ -51,13 +53,17 @@ rainbow title winW winH scale = do
   spritePaint <- loadSpritePaint tile
   prismPaint <- loadPrismPaint tile
   glyphPaint <- loadGlyphPaint tile
+  discPaint <- loadDiscPaint tile
+  blockPaint <- loadBlockPaint tile
 
   let gfx = GFX{
     gfxTile=tile,
     gfxPaints=PS{
       psSprite=spritePaint,
       psPrism=prismPaint,
-      psGlyph=glyphPaint
+      psGlyph=glyphPaint,
+      psDisc=discPaint,
+      psBlock=blockPaint
     },
     gfxFont=font,
     gfxWindow=win,
@@ -122,12 +128,56 @@ type SpriteUniforms =
   ,'("srcXYWH", Float4)
   ,'("dstXYWH", Float4)]
 
+type BlockUniforms =
+  ['("winWH",   Float2)
+  ,'("color",   Float3)
+  ,'("dstXYWH", Float4)]
+
+type DiscUniforms =
+  ['("winWH",   Float2)
+  ,'("color",   Float3)
+  ,'("dstXYWH", Float4)]
+
 type GlyphUniforms =
   ['("winWH",   Float2)
   ,'("srcXYWH", Float4)
   ,'("dstXYWH", Float4)
   ,'("fgColor", Float3)
   ,'("bgColor", Float3)]
+
+loadDiscPaint :: VBO -> IO (Paint DiscUniforms)
+loadDiscPaint vbo = do
+  vao <- newVAO
+  useVAO vao
+  let path1 = "shaders/disc/vertex.glsl"
+  let path2 = "shaders/disc/fragment.glsl"
+  code1 <- readFile path1
+  code2 <- readFile path2
+  shader <- newShader path1 code1 path2 code2
+  useVBO vbo
+  configAttrib shader "position" 2 8 0 GL_FLOAT
+
+  let stones = ug2f . ug3f . ug4f
+  gate <- buildGate shader (stones capstone)
+
+  return (Paint vao shader gate)
+
+loadBlockPaint :: VBO -> IO (Paint BlockUniforms)
+loadBlockPaint vbo = do
+  vao <- newVAO
+  useVAO vao
+  let path1 = "shaders/block/vertex.glsl"
+  let path2 = "shaders/block/fragment.glsl"
+  code1 <- readFile path1
+  code2 <- readFile path2
+  shader <- newShader path1 code1 path2 code2
+  useVBO vbo
+  configAttrib shader "position" 2 8 0 GL_FLOAT
+
+  let stones = ug2f . ug3f . ug4f
+  gate <- buildGate shader (stones capstone)
+
+  return (Paint vao shader gate)
 
 loadSpritePaint :: VBO -> IO (Paint SpriteUniforms)
 loadSpritePaint vbo = do
@@ -251,6 +301,61 @@ withSprites gfx sheet cnv action = do
   glViewport 0 0 (fi w) (fi h)
   useFBO (FBO 0)
   assertGL "withSprites"
+
+type Torch3 = Float2 -> Float -> Float3 -> IO ()
+withDisc :: GFX -> Canvas -> (Torch3 -> IO ()) -> IO ()
+withDisc gfx cnv action = do
+  let Paint vao shader uniforms = (psDisc . gfxPaints) gfx
+  useVAO vao
+  useVBO (gfxTile gfx)
+  useShader shader
+  useFBO (canvasFbo cnv)
+  let d = i22f2 (canvasWH cnv)
+  let I2 cw ch = canvasWH cnv
+  glViewport 0 0 (fi cw) (fi ch)
+
+  --glBlendFunc GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA
+  --glEnable GL_BLEND
+
+  action $ \(F2 cx cy) r color -> do
+    let x = cx - r
+    let y = cy - r
+    let w = 2*r
+    let h = 2*r
+    configUniforms uniforms $
+      Field @"winWH" d >:
+      Field @"color" color >:
+      Field @"dstXYWH" (F4 x y w h) >:
+      R0
+    renderQuad
+  I2 w h <- readIORef (gfxPhysicalWindowDimensions gfx)
+  glViewport 0 0 (fi w) (fi h)
+  useFBO (FBO 0)
+  assertGL "withDisc"
+
+type Torch4 = Float4 -> Float3 -> IO ()
+withBlock :: GFX -> Canvas -> (Torch4 -> IO ()) -> IO ()
+withBlock gfx cnv action = do
+  let Paint vao shader uniforms = (psBlock . gfxPaints) gfx
+  useVAO vao
+  useVBO (gfxTile gfx)
+  useShader shader
+  useFBO (canvasFbo cnv)
+  let d = i22f2 (canvasWH cnv)
+  let I2 cw ch = canvasWH cnv
+  glViewport 0 0 (fi cw) (fi ch)
+
+  action $ \(F4 x y w h) color -> do
+    configUniforms uniforms $
+      Field @"winWH" d >:
+      Field @"color" color >:
+      Field @"dstXYWH" (F4 x y w h) >:
+      R0
+    renderQuad
+  I2 w h <- readIORef (gfxPhysicalWindowDimensions gfx)
+  glViewport 0 0 (fi w) (fi h)
+  useFBO (FBO 0)
+  assertGL "withBlock"
 
 
 -- takes logical window size

@@ -13,6 +13,8 @@ import Data.Foldable
 import Data.Char
 import Data.Maybe
 
+import Control.Exception
+
 import qualified Graphics.UI.GLFW as GLFW
 --import Graphics.GL
 
@@ -26,6 +28,7 @@ import Audio
 import CmdLine
 
 import CardGame
+import Arkanoid
 
 
 -- concentrate on getting widgets to work
@@ -72,6 +75,8 @@ makeArena gfx (F4 x y w h) = do
         withSprites gfx sheet canvas $ \torch -> do
           forM_ (reverse cards) $ \(Card face (F4 x y w h) hidden) -> do
             torch (if hidden then 2 else face) (F2 x y)
+        --withDisc gfx canvas $ \torch -> do
+          --torch (F2 0 0) 5
   
   return $ Widget{
     widgetRepaint=readIORef var1 >>= render gfx canvas sheet,
@@ -79,6 +84,51 @@ makeArena gfx (F4 x y w h) = do
     widgetTime=return (),
     widgetArea=F4 x y w h,
     widgetActions=actionWrapper CardGame.basicGame,
+    widgetFinalize=deleteCanvas canvas
+  }
+
+makeArkanoid gfx (F4 x y w h) = do
+  canvas <- newCanvas (floor w) (floor h)
+
+  let ark = Ark dummyEmptyIntMap [] undefined
+  --let ark = Ark box corners (FParticle (F2 20 230) (F2 30 17))
+
+  var1 <- newIORef ark
+  var2 <- newIORef (F2 0 0)
+
+  -- action wrapper maps "arena actions" to/from user actions properly
+  let shift (F2 mx my) = F2 (mx - (x + w/2)) (my - (y + h/2))
+
+  let actions = pure (return ())
+{-
+  let actionWrapper = -- some of this is common to all widgets, foo is "custom"
+        shiftMouse shift .  -- shift mouse a fixed amount
+        cacheMouse var2 .   -- cache mouse locations to ref, provide mouse location
+        CardGame.foo .      -- remap useractions to cardgame actions, always require mouse location
+        cachedState var1 -- IORef s + s->s = IO ()  (inner action API)
+-}
+  let render gfx canvas (Ark _ _ p) = do
+        useFBO (canvasFbo canvas)
+        clearColorBuffer 0 0 0
+        let F2 x y = particlePosition p
+        withBlock gfx canvas $ \torch -> do
+          torch (F4 (-160) (-240) 1 480) (F3 1 0 0)
+          torch (F4 (-160) (-240) 320 1) (F3 1 0 0)
+          torch (F4 (-160) 239 320 1) (F3 1 0 0)
+          torch (F4 159 (-240) 1 480) (F3 1 0 0)
+        withDisc gfx canvas $ \torch -> do
+          torch (F2 x y) 5 (F3 0 1 0)
+  
+  return $ Widget{
+    widgetRepaint=readIORef var1 >>= render gfx canvas,
+    widgetCanvas=canvas,
+    widgetTime=do
+      Ark els mm p <- readIORef var1
+      let (p',ces) = particle els mm p (1.0 / 4)
+      let F2 x y = particlePosition p'
+      writeIORef var1 (Ark els mm p'),
+    widgetArea=F4 x y w h,
+    widgetActions=actions,
     widgetFinalize=deleteCanvas canvas
   }
 
@@ -204,6 +254,7 @@ main = do
 
   debugger <- makeDebugger gfx (F4 (-320) (-240) 640 480)
   arena    <- makeArena gfx (F4 (-320) (-240) 640 480)
+  arkanoid <- makeArkanoid gfx (F4 0 (-240) 320 480)
   --anim     <- makeAnimation gfx
 
   --globalMouseTranslator win . quitOnEscape win
@@ -221,13 +272,16 @@ main = do
     mlDoEvents=GLFW.pollEvents,
     mlDoTick=do
       widgetTime debugger
-      widgetTime arena,
+      widgetTime arena
+      widgetTime arkanoid,
     mlRender=do
       clearColorBuffer 0 1 0
       widgetRepaint debugger
       widgetRepaint arena
+      widgetRepaint arkanoid
       blitWidget gfx debugger
       blitWidget gfx arena
+      blitWidget gfx arkanoid
       GLFW.swapBuffers win,
     mlDead=GLFW.windowShouldClose win
   }

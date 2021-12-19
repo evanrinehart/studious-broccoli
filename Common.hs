@@ -5,6 +5,7 @@ import Data.Vector.Storable as V (Vector, fromList)
 --import Graphics.GL
 
 data Int2 = I2 !Int !Int deriving Show
+data Int4 = I4 !Int !Int !Int !Int deriving Show
 data Float2 = F2 !Float !Float deriving (Eq,Ord,Show)
 data Float3 = F3 !Float !Float !Float deriving Show
 data Float4 = F4 !Float !Float !Float !Float deriving Show
