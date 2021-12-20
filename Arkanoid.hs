@@ -20,6 +20,7 @@ import Data.Maybe
 import Data.Function
 import Data.Foldable
 import Control.Monad.State
+import Control.Monad.Writer
 
 import Debug.Trace
 
@@ -28,151 +29,25 @@ import Control.Concurrent
 
 import Common
 
-data Ark = Ark Elements [(Float2,Micro)] Particle
-  deriving Show
-
 -- an extended geometric path on the plane, carries label and payload
-data Elem = RuleAB Float2 Float2
-          | Circle Float2 Float
+data Elem = RuleAB Float2 Float2 | Circle Float2 Float
   deriving Show
 
 -- microsurface view, either 1 normal or 2, refers to elements involved
-data Micro = Flat Float2 IntSet
-           | Corner Float2 Float2 IntSet
+data Micro = Flat Float2 | Corner Float2 Float2
   deriving Show
 
-microElems :: Micro -> IntSet
-microElems (Flat _ es) = es
-microElems (Corner _ _ es) = es
-  
-type Elements = IntMap Elem
+data Particle = P !Float2 !Float2
+  deriving Show
 
-collisionTest :: Float2 -> Float2 -> Elem -> Maybe (Float,Float2)
-collisionTest x v el = fmap g (answerMaybe el) where
-  answerMaybe (RuleAB la lb) = particleHitsLineIn x v la lb
-  answerMaybe (Circle c r)   = particleHitsCircleIn x v c r
-  g dt = let x' = uniform dt x v in (dt,x')
+data ArkanoidException = ArkanoidException String
+  deriving Show
 
+instance Exception ArkanoidException
 
-{-
-getMicrosite :: MicroMap -> Float2 -> Maybe Micro
-getMicrosite mm x = fmap snd $ find (\(y,_) -> norm (x-y) <= 0.001) mm
--}
-
--- an elem has a flat surface unless micromap indicates unusual feature here
---overlay :: Elem -> MicroMap -> Float2 -> Micro
---overlay el mm x = case getMicrosite mm x of
---  Nothing -> Flat (normalize $ normalToElementAt el x) (IS.singleton (elementNo el))
---  Just u  -> u
-
--- critical support to get microbeam to work:
---   get a set of possible elements to do a collision test on, using x and v
---   overlay special microsites at x, fallback to given el
---   you can pass in all elements and microsites, or narrow it down first
-
--- fire the test beam into the geometry.
--- If it hits within the time limit return hit details (time, place, microsurface)
-
--- a particle is either in free flight or is in the process of colliding
-data Particle
-  = FParticle Float2 Float2 -- x v
-  | CParticle Float2 Float2 Float2 IntSet -- x v0 v1 elements
-      deriving Show
-
-{-
-particle :: Net -> Solids -> Particle -> Float -> (Particle, [(Float,(Float,Platonic))])
-particle allElements mm p t1 = go 0 [] p where
-  go t accum (FParticle x v)        = go2 t accum x v allElements
-  go t accum (CParticle x v0 v1 plats) = go2 t ((t,(x,plats)) : accum) x v1 (allElements `IM.withoutKeys` cs)
-
-  go2 t accum x v targets = case microBeam targets mm x v t1 of
-    Nothing -> 
-      -- issue, if t1 - t is too small, x' = x
-      -- the supposed free particle may be left at the collision site
-      -- i.e. final collision was too recent
-      let issue = detect (t1 - t) x v in
-      let x' = issue `seq` uniform (t1 - t) x v in
-      (FParticle x' v, accum)
-    Just (dt,(hitX,u,_)) ->
-      -- (non?)issue, if dt is too small, t' = t
-      -- though... we don't do dynamics with t here
-      -- particle uses hitX and u to determine where to go next
-      let t' = t + dt in
-      let v' = microInteraction u v in
-      let es = microElems u in
-      let ce = STP t' hitX es in
-      case compare t' (t1 - 0.001) of
-        LT -> go t' accum (CParticle hitX v v' es)
-        _  -> (CParticle hitX v v' es, accum)
--}
-
-detect dt (F2 x y) (F2 vx vy) = 
-  let x' = x + vx * dt in
-  let y' = y + vy * dt in
-  if x==x' || y==y' then error (show (dt, F2 x y, F2 vx vy)) else ()
 
 particlePosition :: Particle -> Float2
-particlePosition (FParticle x _) = x
-particlePosition (CParticle x _ _ _) = x
-
-{-
-printParticleFuture :: IntMap Elem -> MicroMap -> Particle -> IO ()
-printParticleFuture shapes mm p0 = go p0 where
-  go :: Particle -> IO ()
-  go p =
-    let (p', ces) = particle shapes mm p 1 in do
-    let F2 x y = particlePosition p'
-    let no = length ces
-    print (p', ces)
-    --printf "%6.3f %6.3f %d\n" x y no
-    threadDelay 1000000
-    --print (p', ces)
-    go p'
--}
-
-
-
-
-
-
-
--- level file
-
-data AbstractLevel = AL Int Int (Grid Char) deriving Show
-
-readLevelFile :: FilePath -> IO AbstractLevel
-readLevelFile path = do
-  ls <- fmap lines (readFile path)
-  let header:more = ls
-  let (w,h) = readLevelHeader header
-  let blocks = map readBlockData more
-  return (AL w h (gridFromList blocks))
-
-readLevelHeader :: String -> (Int,Int)
-readLevelHeader input =
-  let stuff = takeStr "level " input in
-  let [l,r] = split ' ' stuff in
-  (read l, read r)
-
-readBlockData :: String -> ((Int,Int), Char)
-readBlockData input =
-  let stuff = takeStr "block " input in
-  let [c,i,j] = split ' ' stuff in
-  ((read i, read j), head c)
-
-split :: Eq a => a -> [a] -> [[a]]
-split s = go where
-  go xs = case break (==s) xs of
-    (chunk,[])   -> [chunk]
-    (chunk,more) -> chunk : go (dropOnly s more)
-  dropOnly s y@(x:xs) = if x == s then xs else y
-
-takeStr :: String -> String -> String
-takeStr "" input = input
-takeStr (c:cs) (d:ds) = if c==d then takeStr cs ds else error "takeStr failed"
-
-
-
+particlePosition (P x _) = x
 
 -- GEOMETRY STUFF
 {-
@@ -295,9 +170,6 @@ lineSegmentParam x la lb =
 reflect :: Float2 -> Float2 -> Float2
 reflect n v = v - (2 * v `dot` n) *. n
 
-uniform :: Float -> Float2 -> Float2 -> Float2
-uniform dt x v = x + v .* dt
-
 norm (F2 x y) = sqrt (x*x + y*y)
 dot (F2 a b) (F2 c d) = a*c + b*d
 
@@ -310,22 +182,7 @@ s *. (F2 x y) = F2 (s*x) (s*y)
 infixl 7 .*
 infixl 7 *.
 
-
-
-
-
-
--- errors. They should only happen in case of a bug.
-
-data ArkanoidException = ArkanoidException String deriving Show
-instance Exception ArkanoidException
-
--- future 
-
-data ArkanoidF a = ArkanoidF
-  { arkMouse      :: Float -> a
-  , arkLeftClick  :: a
-  , arkRightClick :: a }
+propogate dt (P x v) = P (x + v .* dt) v
 
 
 
@@ -333,260 +190,12 @@ data ArkanoidF a = ArkanoidF
 
 
 
--- experimental
-
-{-
-data TimeVsLimit = WayBefore | WayAfter | AtLimit deriving Show
--- compare a time point to a time limit
--- LT = before, resolve a collision
--- GT = way after, don't do anything
--- EQ = collision happens near the time limit, collision in progress
-compareToTimeLimit :: Float -> Float -> TimeVsLimit
-compareToTimeLimit t limit
-  | t < limit         = WayBefore -- "before = way before"
-  | t == limit        = AtLimit
-  | otherwise         = WayAfter -- "way after"
--}
 
 
 
-data Quad a = Quad a a a a
-data QuadTree a = Leaf Int [a] | QuadSplit Float2 (Quad (QuadTree a))
+-- GRID
 
-data Platonic = Paddle Float Float | Block Int Int | Wall Float2 Float2 deriving Show
-
--- the abstract level is just a layout of walls and blocks
--- the geometry database is derived from the abstract level
--- each element can be followed back to an abstract block or wall
--- (the paddle is a dynamic inclusion in the database)
-
--- geometry database
--- the geometry database is basically a set of elements with some functionality
--- (microsites are generated from high level data)
--- 1. focus on the first result of a microbeam cast to get a useful db partition
--- 2. combine two databases (level + paddle)
--- 3. remove geometry by abstract block
--- 
--- sets: blocks, elements
--- virtual set: microsite(blocks)
--- relations:
---   element -> platonic
---   block -> [element]
---   microsite -> [element]
--- spatial index: area -> [segment]
-
--- Operations:
--- remove block
--- list all blocks
--- merge databases (level + paddle)
--- microbeam :: XV -> DB -> Maybe (T, X, MicroSurface, DB1(with only), DB2(without))
-
-removeBlock :: Int -> Int -> Net -> Net
-removeBlock i j net = net
-
-allPlatonics :: Net -> [Platonic] -- map all segments to platonic and unique
-allPlatonics net = []
-
-merge :: Net -> Net -> Net
-merge n1 n2 = n1
-
-netSplitArea :: Float2 -> Float -> Net -> (Net,Net)
-netSplitArea x r net = (small, large) where
-  ks = IM.keysSet $ IM.filterWithKey (\k el -> nearElement x el) (netElements net)
-  small = undefined
-  large = undefined
-  
-
-netSplit1 :: Int -> Net -> (Net,Net)
-netSplit1 k net = (netIsolate k net, netDelete k net)
-
-netDelete :: Int -> Net -> Net
-netDelete k (Net els elp ix c) = Net els' elp' ix' c where
-  els' = IM.delete k els
-  elp' = IM.delete k elp
-  ix' = case IM.lookup k elp of
-    Just (Block i j) -> gridMod (L.delete k) i j ix
-    Nothing          -> ix
-
-netIsolate :: Int -> Net -> Net
-netIsolate k (Net els elp ix c) = case IM.lookup k els of
-  Nothing -> emptyNet
-  Just el -> Net els' elp' ix' c where
-    els' = IM.singleton k el
-    elp' = IM.singleton k (elp ! k)
-    plat = elp ! k
-    ix' = case plat of
-      Block i j -> gridSingleton i j [k]
-      _         -> IM.empty
-
-emptyNet :: Net
-emptyNet = Net IM.empty IM.empty IM.empty 0
-
---data AbstractLevel = AL Int Int (Grid Char) deriving Show
 type Grid a = IntMap (IntMap a)
-
-data Net = Net
-  { netElements :: IntMap Elem -- low level shapes
-  , netElementPlatonic :: IntMap Platonic -- what elements correspond to
-  , netBlockElements :: Grid [Int] -- the elements generated by a block
-  , netCounter :: Int
-  } deriving Show
-
--- the net tells you if a ray hits anything and where
--- the solids tell you if you hit a microsite with special handling
--- the result is the net split at the hit site
-
-type MicroHit = (Float,(Float2,Micro,(Net,Net)))
-type BigHit = (Float,(Float2,Micro,(Net,Net)))
-
-netCollisions :: Float2 -> Float2 -> Net -> [BigHit]
-netCollisions baseX v net = catMaybes $ map g (IM.toList (netElements net)) where
-  g (i,el) = case collisionTest baseX v el of
-    Just (t,x) -> let n = normalToElementAt el x
-                  in Just (t, (x, Flat n _, netSplit1 i net))
-    Nothing    -> Nothing
-
-microLookup :: Float2 -> Solids -> Maybe (Micro, [Int])
-microLookup = error "microlookup"
-
-microBeam :: Net -> Solids -> Float2 -> Float2 -> Float -> Maybe MicroHit
-microBeam net solids x v limit = fmap analyze hit where
-  hits = netCollisions x v net
-  hit = beforeLimit (soonestOf (noHit : hits))
-
-  analyze z@(t,(x,_,_)) = case microLookup x solids net of
-    Just (u, is) -> (t,(x,u,netSplit is net))
-    Nothing      -> z
-
-  soonestOf = minimumBy (comparing fst)
-  beforeLimit p@(t,_) = if t < limit then Just p else Nothing
-  noHit = (1/0, bug)
-  bug = error "(bug) microBeam placeholder"
-
--- "high level" gameplay types
--- AbstractLevel -> Solids
--- AbstractLevel -> Net
-
-data Solids = Solids -- Solids -> XV -> Maybe Micro
-  { solidBlocks   :: Grid Char
-  , solidPaddleXY :: Float2
-  , solidAreaWH   :: Float2
-  } deriving Show
-
-data Solids2 = Solids2
-  { s2Blocks :: Grid Char
-  , s2Pad    :: Maybe Float2
-  , s2Top    :: Maybe Float
-  , s2Left   :: Maybe Float
-  , s2Righ   :: Maybe Float }
-
-makeSolids :: AbstractLevel -> Solids
-makeSolids (AL wi hi blocks) = Solids blocks padStart (F2 w h) where
-  w = s * fromIntegral wi
-  h = s * fromIntegral hi
-  bottom = -h / 2
-  padStart = F2 0 (bottom + s)
-  s = 32
-
-radiusToArea :: Float2 -> Float -> Float4
-radiusToArea c r = let F2 x y = c - F2 r r in F4 x y (2*r) (2*r)
-
-overlapping :: Float4 -> Float4 -> Bool
-overlapping (F4 x1 y1 w1 h1) (F4 x2 y2 w2 h2) = not apart where
-  apart = x2 > x1 + w1 || x1 > x2 + h2 || y2 > y1 + h1 || y1 > y2 + h2
-
-overlappingIntBox :: Int4 -> Int4 -> Bool
-overlappingIntBox (I4 x1 y1 w1 h1) (I4 x2 y2 w2 h2) = not apart where
-  apart = x2 > x1 + w1 || x1 > x2 + h2 || y2 > y1 + h1 || y1 > y2 + h2
-
--- this function is intended for points not on a boundary
-pointToGridIndex :: Float2 -> Float -> Float2 -> (Int,Int)
-pointToGridIndex (F2 aw ah) s (F2 x y) = (0,0)
-
-coveringGrid :: Int4 -> Grid a -> Grid a
-coveringGrid area grid = filterGrid g grid where
-  g i j _ = overlappingIntBox area (I4 i j 0 0)
-
-  
--- 
-
-
-netGenInt :: State Net Int
-netGenInt = state $ \net@Net{netCounter=n} -> (n, net{netCounter=n+1})
-
-netModElements :: (IntMap Elem -> IntMap Elem) -> State Net ()
-netModElements f = modify $ \net@Net{netElements=im} -> net{netElements=f im}
-
-netModElementPlatonic :: (IntMap Platonic -> IntMap Platonic) -> State Net ()
-netModElementPlatonic f = modify $ \net@Net{netElementPlatonic=im} -> net{netElementPlatonic=f im}
-
-netModBlockElements :: (Grid [Int] -> Grid [Int]) -> State Net ()
-netModBlockElements f = modify $ \net@Net{netBlockElements=im} -> net{netBlockElements=f im}
-
--- FIXME
-dummyEmptyIntMap = IM.empty
-
-makeNet :: AbstractLevel -> Net
-makeNet (AL wi hi blocks) = flip execState emptyNet $ do
-  let s = 32
-  let w = s * fromIntegral wi
-  let h = s * fromIntegral hi
-  makeAbyss w h
-  makeWalls w h
-  forM_ (gridAssoc blocks) $ \(i,j,x) -> do
-    let els = blockToElements (F2 w h) 5 i j 
-    forM_ els $ \el -> do
-      n <- netGenInt
-      netModElements (IM.insert n el)
-      netModElementPlatonic (IM.insert n (Block i j))
-      netModBlockElements (gridUpsert i j (n:) [n])
-
-blockToElements :: Float2 -> Float -> Int -> Int -> [Elem]
-blockToElements (F2 w h) r i j =
-  let top  = h/2
-      left = -w/2
-      s = 32
-      f2 m n = F2 (fi m) (h - fi n)
-      a = f2 (s * (i+0)) (s * (j+1))
-      b = f2 (s * (i+0)) (s * (j+0))
-      c = f2 (s * (i+1)) (s * (j+0))
-      d = f2 (s * (i+1)) (s * (j+1))
-      padl p q = let z = F2 r 0 in RuleAB (p - z) (q - z)
-      padr p q = let z = F2 r 0 in RuleAB (p + z) (q + z)
-      padu p q = let z = F2 0 r in RuleAB (p - z) (q - z)
-      padd p q = let z = F2 0 r in RuleAB (p + z) (q + z)
-      circle x = Circle x r
-   in [padd a d, padr d c, padu c b, padl b a
-      ,circle a, circle b, circle c, circle d]
-
-makeAbyss w h = do
-  n <- netGenInt
-  let l = -w/2
-  let r = w/2
-  let b = -h/2
-  let el = RuleAB (F2 r b) (F2 l b)
-  netModElements (IM.insert n el)
-  netModElementPlatonic (IM.insert n Abyss)
-
-makeWalls w h = do
-  let l = -w/2
-  let r = w/2
-  let bot = -h/2
-  let t = h/2
-  let a = F2 l bot
-  let b = F2 l t
-  let c = F2 r t
-  let d = F2 r bot
-  makeWall a b
-  makeWall b c
-  makeWall c d
-
-makeWall p q = do
-  n <- netGenInt
-  let el = RuleAB p q
-  netModElements (IM.insert n el)
-  netModElementPlatonic (IM.insert n Wall)
-  
 
 foldlGrid :: (Int -> Int -> a -> b -> b) -> b -> Grid a -> b
 foldlGrid visit start rows = IM.foldlWithKey' f start rows where
@@ -624,10 +233,20 @@ gridFromList ps = foldl (\grid ((i,j),x) -> gridInsert i j x grid) IM.empty ps
 gridSingleton :: Int -> Int -> a -> Grid a
 gridSingleton i j x = IM.singleton j (IM.singleton i x)
 
---fromAbstractLevel :: AbstractLevel -> Net
---fromAbstractLevel (AL w h blocks) =
 
-data ConcreteLevel = CL
+radiusToArea :: Float2 -> Float -> Float4
+radiusToArea c r = let F2 x y = c - F2 r r in F4 x y (2*r) (2*r)
+
+overlapping :: Float4 -> Float4 -> Bool
+overlapping (F4 x1 y1 w1 h1) (F4 x2 y2 w2 h2) = not apart where
+  apart = x2 > x1 + w1 || x1 > x2 + h2 || y2 > y1 + h1 || y1 > y2 + h2
+
+overlappingIntBox :: Int4 -> Int4 -> Bool
+overlappingIntBox (I4 x1 y1 w1 h1) (I4 x2 y2 w2 h2) = not apart where
+  apart = x2 > x1 + w1 || x1 > x2 + h2 || y2 > y1 + h1 || y1 > y2 + h2
+
+
+data ConcreteLevel a = CL
   { clL :: Float
   , clR :: Float
   , clT :: Float
@@ -637,47 +256,190 @@ data ConcreteLevel = CL
   , clBlocks :: Grid (Float4, Char)
   }
 
-type XV = (Float2,Float2)
-type TX = (Float,Float2)
-type XR = (Float2,Float)
-data Pad = Pad
-  { padXY :: Float2
-  , padWH :: Float2 }
-      deriving Show
 
-
-
+-- PARTICLE PHYSICS
 
 -- "one sided lines"
 elementIntersect :: Float2 -> Float2 -> Elem -> Maybe (Float,Float2)
 elementIntersect x v el =
   if inElementCollisionSpace x el
     then
-      let f dt = (dt, uniform dt x v)
-      in case el of
+      let f dt = (dt, x + v .* dt) in
+      case el of
         RuleAB la lb -> fmap f (particleHitsLineIn x v la lb)
         Circle c r   -> fmap f (particleHitsCircleIn x v c r)
     else Nothing
 
 inElementCollisionSpace :: Float2 -> Elem -> Bool
-inElementCollisionSpace x (RuleAB la lb) = lineSign x la lb < 0
+inElementCollisionSpace x (RuleAB la lb) = lineSign x la lb > 0
 inElementCollisionSpace x (Circle c r) = norm (x - c) > r
 
 -- velocity reflects according to surface normal(s)
 -- (or does nothing because v is already headed out)
 microInteraction :: Micro -> Float2 -> Float2
-microInteraction (Flat n _) v = if n `dot` v < 0 then reflect n v else v
-microInteraction (Corner n1 n2 _) v =
+microInteraction (Flat n) v = if n `dot` v < 0 then reflect n v else v
+microInteraction (Corner n1 n2) v =
   case (v `dot` n1 < 0, v `dot` n2 < 0) of
     (True,   True) -> reflect n1 (reflect n2 v)
     (True,  False) -> reflect n1 v
     (False,  True) -> reflect n2 v
     (False, False) -> v
 
-elementIntersectMany :: Float2 -> Float2 -> [Elem] -> Maybe (Float, Float2, Elem)
-elementIntersectMany x v elems =
-  let tag el (t,x) = (t,x,el) in
-  case catMaybes $ map (\el -> fmap (tag el) (elementIntersect x v el)) elems of
+firstElementIntersection :: Float2 -> Float2 -> [(Elem,a)] -> Maybe (Float, Float2, Elem, a)
+firstElementIntersection x v elements =
+  let tag (el,z) (t,x) = (t,x,el,z) in
+  let test p@(el,_) = fmap (tag p) (elementIntersect x v el) in
+  case catMaybes (map test elements) of
     []   -> Nothing
-    hits -> Just $ minimumBy (comparing (\(t,_,_) -> t)) hits
-  
+    hits -> Just (minimumBy (comparing (\(t,_,_,_) -> t)) hits)
+
+firstElementIntersectionLimited :: Float2 -> Float2 -> Float -> [(Elem,a)] -> Maybe (Float, Float2, Elem, a)
+firstElementIntersectionLimited x v limit elements = case firstElementIntersection x v elements of
+  Nothing -> Nothing
+  Just (t,x,el,z) -> if t <= limit then Just (t,x,el,z) else Nothing
+
+data At a = At
+  { atT :: !Float
+  , atX :: !Float2
+  , atStuff :: [a] }
+      deriving Show
+
+data Env a = Env
+  { envMacroScan :: Float2 -> Float -> [(Elem,a)]
+  , envMicroScan :: Float2 -> Maybe (Micro, [a]) }
+
+particle :: Show a => Env a -> Float -> Particle -> Writer [At a] Particle
+particle env limit p_initial = loop 0 p_initial where
+  loop t p@(P x v) = do
+    let radius = norm v * (limit - t)
+    let elements = envMacroScan env x radius
+    case firstElementIntersectionLimited x v limit elements of
+      Nothing -> return (propogate (limit - t) p)
+      Just (dt, hitX, el, a) -> do
+        let t'     = t + dt
+        let (u,as) = resolveMicroStuff env el a hitX
+        let v'     = microInteraction u v
+        tell [At t' hitX as]
+        if t' < limit
+          then loop t' (P hitX v')
+          else return (P hitX v')
+
+resolveMicroStuff :: Env a -> Elem -> a -> Float2 -> (Micro, [a])
+resolveMicroStuff env el z x = case envMicroScan env x of
+  Nothing      -> (Flat (normalize $ normalToElementAt el x), [z])
+  Just (u, zs) -> (u, zs)
+
+
+data Solid = Wall | Pad | Block Int Int deriving Show
+makeEnv :: Float -> AbstractLevel -> Env Solid
+makeEnv padx (AL w h blocks) = Env elscan uscan where
+  a = F2 (-160) (-240)
+  b = F2 (-160) 240
+  c = F2 160 240
+  d = F2 160 (-240)
+  elscan x r = [(RuleAB a b, Wall),(RuleAB b c, Wall)
+               ,(RuleAB c d, Wall),(RuleAB d a, Wall)] :: [(Elem,Solid)]
+  uscan x = if norm (x - F2 160 240) < 0.001
+    then Just (corn, [Wall,Wall] :: [Solid]) 
+    else Nothing
+      where corn = Corner (F2 (-1) 0) (F2 0 (-1))
+
+
+{-
+microBeam :: Net -> Solids -> Float2 -> Float2 -> Float -> Maybe MicroHit
+microBeam net solids x v limit = fmap analyze hit where
+  hits = netCollisions x v net
+  hit = beforeLimit (soonestOf (noHit : hits))
+
+  analyze z@(t,(x,_,_)) = case microLookup x solids net of
+    Just (u, is) -> (t,(x,u,netSplit is net))
+    Nothing      -> z
+
+  soonestOf = minimumBy (comparing fst)
+  beforeLimit p@(t,_) = if t < limit then Just p else Nothing
+  noHit = (1/0, bug)
+  bug = error "(bug) microBeam placeholder"
+-}
+
+{-
+particle :: Net -> Solids -> Particle -> Float -> (Particle, [(Float,(Float,Platonic))])
+particle allElements mm p t1 = go 0 [] p where
+  go t accum (FParticle x v)        = go2 t accum x v allElements
+  go t accum (CParticle x v0 v1 plats) = go2 t ((t,(x,plats)) : accum) x v1 (allElements `IM.withoutKeys` cs)
+
+  go2 t accum x v targets = case microBeam targets mm x v t1 of
+    Nothing -> 
+      -- issue, if t1 - t is too small, x' = x
+      -- the supposed free particle may be left at the collision site
+      -- i.e. final collision was too recent
+      let issue = detect (t1 - t) x v in
+      let x' = issue `seq` uniform (t1 - t) x v in
+      (FParticle x' v, accum)
+    Just (dt,(hitX,u,_)) ->
+      -- (non?)issue, if dt is too small, t' = t
+      -- though... we don't do dynamics with t here
+      -- particle uses hitX and u to determine where to go next
+      let t' = t + dt in
+      let v' = microInteraction u v in
+      let es = microElems u in
+      let ce = STP t' hitX es in
+      case compare t' (t1 - 0.001) of
+        LT -> go t' accum (CParticle hitX v v' es)
+        _  -> (CParticle hitX v v' es, accum)
+-}
+
+
+-- ???
+blockToElements :: Float2 -> Float -> Int -> Int -> [Elem]
+blockToElements (F2 w h) r i j =
+  let top  = h/2
+      left = -w/2
+      s = 32
+      f2 m n = F2 (fi m) (h - fi n)
+      a = f2 (s * (i+0)) (s * (j+1))
+      b = f2 (s * (i+0)) (s * (j+0))
+      c = f2 (s * (i+1)) (s * (j+0))
+      d = f2 (s * (i+1)) (s * (j+1))
+      padl p q = let z = F2 r 0 in RuleAB (p - z) (q - z)
+      padr p q = let z = F2 r 0 in RuleAB (p + z) (q + z)
+      padu p q = let z = F2 0 r in RuleAB (p - z) (q - z)
+      padd p q = let z = F2 0 r in RuleAB (p + z) (q + z)
+      circle x = Circle x r
+   in [padd a d, padr d c, padu c b, padl b a
+      ,circle a, circle b, circle c, circle d]
+
+
+-- LEVEL FILE
+
+data AbstractLevel = AL Int Int (Grid Char) deriving Show
+
+readLevelFile :: FilePath -> IO AbstractLevel
+readLevelFile path = do
+  ls <- fmap lines (readFile path)
+  let header:more = ls
+  let (w,h) = readLevelHeader header
+  let blocks = map readBlockData more
+  return (AL w h (gridFromList blocks))
+
+readLevelHeader :: String -> (Int,Int)
+readLevelHeader input =
+  let stuff = takeStr "level " input in
+  let [l,r] = split ' ' stuff in
+  (read l, read r)
+
+readBlockData :: String -> ((Int,Int), Char)
+readBlockData input =
+  let stuff = takeStr "block " input in
+  let [c,i,j] = split ' ' stuff in
+  ((read i, read j), head c)
+
+split :: Eq a => a -> [a] -> [[a]]
+split s = go where
+  go xs = case break (==s) xs of
+    (chunk,[])   -> [chunk]
+    (chunk,more) -> chunk : go (dropOnly s more)
+  dropOnly s y@(x:xs) = if x == s then xs else y
+
+takeStr :: String -> String -> String
+takeStr "" input = input
+takeStr (c:cs) (d:ds) = if c==d then takeStr cs ds else error "takeStr failed"

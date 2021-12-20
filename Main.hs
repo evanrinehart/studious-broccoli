@@ -14,6 +14,7 @@ import Data.Char
 import Data.Maybe
 
 import Control.Exception
+import Control.Monad.Writer
 
 import qualified Graphics.UI.GLFW as GLFW
 --import Graphics.GL
@@ -90,11 +91,10 @@ makeArena gfx (F4 x y w h) = do
 makeArkanoid gfx (F4 x y w h) = do
   canvas <- newCanvas (floor w) (floor h)
 
-  let ark = Ark dummyEmptyIntMap [] undefined
-  --let ark = Ark box corners (FParticle (F2 20 230) (F2 30 17))
-
-  var1 <- newIORef ark
+  var1 <- newIORef (P (F2 0 80) (F2 1 1))
   var2 <- newIORef (F2 0 0)
+
+  lvl <- readLevelFile "levels/0"
 
   -- action wrapper maps "arena actions" to/from user actions properly
   let shift (F2 mx my) = F2 (mx - (x + w/2)) (my - (y + h/2))
@@ -107,7 +107,7 @@ makeArkanoid gfx (F4 x y w h) = do
         CardGame.foo .      -- remap useractions to cardgame actions, always require mouse location
         cachedState var1 -- IORef s + s->s = IO ()  (inner action API)
 -}
-  let render gfx canvas (Ark _ _ p) = do
+  let render gfx canvas p = do
         useFBO (canvasFbo canvas)
         clearColorBuffer 0 0 0
         let F2 x y = particlePosition p
@@ -123,10 +123,12 @@ makeArkanoid gfx (F4 x y w h) = do
     widgetRepaint=readIORef var1 >>= render gfx canvas,
     widgetCanvas=canvas,
     widgetTime=do
-      Ark els mm p <- readIORef var1
-      let (p',ces) = particle els mm p (1.0 / 4)
-      let F2 x y = particlePosition p'
-      writeIORef var1 (Ark els mm p'),
+      p <- readIORef var1
+      --let (p',ces) = particle els mm p (1.0 / 4)
+      let env = makeEnv 0 lvl
+      let (p',zs) = runWriter (particle env 1 p)
+      print p'
+      writeIORef var1 p',
     widgetArea=F4 x y w h,
     widgetActions=actions,
     widgetFinalize=deleteCanvas canvas
