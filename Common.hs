@@ -1,12 +1,13 @@
 {-# LANGUAGE DataKinds #-}
 module Common where
 
+import Test.QuickCheck
 import Data.Vector.Storable as V (Vector, fromList)
 --import Graphics.GL
 
 data Int2 = I2 !Int !Int deriving Show
 data Int4 = I4 !Int !Int !Int !Int deriving Show
-data Float2 = F2 !Float !Float deriving (Eq,Ord,Show)
+data Float2 = F2 !Float !Float deriving (Eq,Ord,Show,Read)
 data Float3 = F3 !Float !Float !Float deriving Show
 data Float4 = F4 !Float !Float !Float !Float deriving Show
 data Rect a = Rect !a !a !a !a
@@ -69,3 +70,27 @@ instance Num Float2 where
   abs _ = error "can't abs Float2"
   signum _ = error "can't signum Float2"
   fromInteger i = F2 (fromInteger i) (fromInteger i)
+
+normalize x = x ./ norm x
+
+-- n must be normalized
+reflect :: Float2 -> Float2 -> Float2
+reflect n v = v - (2 * v `dot` n) *. n
+
+norm (F2 x y) = sqrt (x*x + y*y)
+dot (F2 a b) (F2 c d) = a*c + b*d
+
+cross2 (F2 a b) (F2 c d) = a*d - b*c
+
+(F2 x y) ./ s = F2 (x/s) (y/s)
+s *. (F2 x y) = F2 (s*x) (s*y)
+(F2 x y) .* s = F2 (x*s) (y*s)
+
+infixl 7 .*
+infixl 7 *.
+
+instance Arbitrary Float2 where
+  arbitrary = do
+    x <- arbitrary
+    y <- arbitrary
+    return (F2 x y)

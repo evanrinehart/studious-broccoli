@@ -30,6 +30,7 @@ import CmdLine
 
 import CardGame
 import Arkanoid
+import Level
 
 
 -- concentrate on getting widgets to work
@@ -91,7 +92,8 @@ makeArena gfx (F4 x y w h) = do
 makeArkanoid gfx (F4 x y w h) = do
   canvas <- newCanvas (floor w) (floor h)
 
-  var1 <- newIORef (P (F2 0 80) (F2 1 1))
+  var1 <- newIORef (P (F2 160.00001 80) (F2 0 (-1)))
+  --var1 <- newIORef (P (F2 0 80) (F2 1.0000000 0))
   var2 <- newIORef (F2 0 0)
 
   lvl <- readLevelFile "levels/0"
@@ -126,8 +128,11 @@ makeArkanoid gfx (F4 x y w h) = do
       p <- readIORef var1
       --let (p',ces) = particle els mm p (1.0 / 4)
       let env = makeEnv 0 lvl
-      let (p',zs) = runWriter (particle env 1 p)
-      print p'
+      --let (p',zs) = runWriter (particle env 128 p)
+      let dps = debugParticle env 1 p
+      putStrLn "==="
+      mapM_ print dps
+      let DP _ _ _ _ p' = last dps
       writeIORef var1 p',
     widgetArea=F4 x y w h,
     widgetActions=actions,
