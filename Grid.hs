@@ -46,6 +46,10 @@ gridFromList ps = foldl (\grid ((i,j),x) -> gridInsert i j x grid) IM.empty ps
 gridSingleton :: Int -> Int -> a -> Grid a
 gridSingleton i j x = IM.singleton j (IM.singleton i x)
 
+gridToList :: Grid a -> [((Int,Int),a)]
+gridToList grid = concatMap (\(j,row) -> map (\(i,x) -> ((i,j),x)) (IM.toList row)) (IM.toList grid)
+
+
 
 radiusToArea :: Float2 -> Float -> Float4
 radiusToArea c r = let F2 x y = c - F2 r r in F4 x y (2*r) (2*r)

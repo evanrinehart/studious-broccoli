@@ -1,9 +1,12 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE GADTs #-}
 module Level where
 
 import Data.Map (Map); import qualified Data.Map as M
 import Control.Monad.Reader
 import Debug.Trace
+
+import Data.Reflection
 
 import Common
 import Grid
@@ -22,9 +25,27 @@ data Pent a = Pent a a a a a deriving Show
 data Quad a = Quad a a a a deriving Show
 type Build a = [a] -> [a]
 
--- data Env a = Env
---  { envMacroScan :: Float2 -> Float  -> [(Elem,a)]
---  , envMicroScan :: Float2 -> Float2 -> [At (Micro,[a])] } -- see notes on microscanning
+
+
+
+
+-- AbstractLevel is the most abstract form of a level and can be loaded from a file
+-- Plat indicates what sort of object the ball could hit
+-- ElemCode is an abstract form of a geometric element that the ball could cross
+-- MicroCode. The location of a microsite and the character of the microsurface (Micro) there
+
+north = F2 0 1
+south = -(F2 0 1)
+east = F2 1 0
+west = -(F2 1 0)
+uu = Flat north
+ud = Flat south
+ul = Flat west
+ur = Flat east
+uur = Corner north east
+uul = Corner north west
+udr = Corner south east
+udl = Corner south west
 
 {-
 visitSquare :: Int -> Int -> Grid c -> Map ElemCode Plat -> Map ElemCode Plat
@@ -45,6 +66,7 @@ visitSquare i j grid m =
 -- to turn pad position and level into geometry we need:
 --   ???
 
+{-
 foo :: WorldDimensions -> AbstractLevel -> Float2 -> Float -> [(ElemCode,Plat)]
 foo wd al x r =
   let (box0,box1) = radiusToBox x r
@@ -53,22 +75,60 @@ foo wd al x r =
       ixs = boundingBoxI2 i1 i2
       codes = genElemCodes al ixs
   in M.toList codes
+-}
 
 data WorldDimensions = WD
   { ballRadius :: Float
   , boardWH :: Float2
   , blockWH :: Float2 }
+      deriving Show
 
-wd = WD 5 (F2 320 480) (F2 32 32)
+--  1    0 is in center of canvas
+-- 0 2   x increases right
+--  3    y increases up
+worldLine :: WorldDimensions -> LenCode -> Int -> (Float2, Float2)
+worldLine (WD r _ (F2 bw bh)) len 0 =
+  let (kl,kr) = adjustments r len
+      y0 = 0 + kl
+      y1 = bh - kr
+  in (F2 r y0, F2 r y1)
+worldLine (WD r _ (F2 bw bh)) len 1 =
+  let (kl,kr) = adjustments r len
+      x0 = 0 + kl
+      x1 = bw - kr
+      y  = bh - r
+  in (F2 x0 y, F2 x1 y)
+worldLine (WD r _ (F2 bw bh)) len 2 =
+  let (kl,kr) = adjustments r len
+      y0 = bh - kl
+      y1 = 0 + kr
+      x  = bw - r
+  in (F2 x y0, F2 x y1)
+worldLine (WD r _ (F2 bw bh)) len 3 =
+  let (kl,kr) = adjustments r len
+      x0 = bw - kl
+      x1 = 0 + kr
+  in (F2 x0 r, F2 x1 r)
+
+adjustments :: Float -> LenCode -> (Float,Float)
+adjustments r Long = (0,0)
+adjustments r Short = (r,r)
+adjustments r ShortPlusL = (0,r)
+adjustments r ShortPlusR = (r,0)
 
 
-
+--  1
+-- 0 2
+--  3
 --data ElemCode = OutCorner !Int !Int | Edge !Int !Int !LenCode !Int deriving (Eq,Ord,Show)
-concretizeElem :: WorldDimensions -> ElemCode -> Elem
-concretizeElem (WD r (F2 w h) (F2 bw bh)) code = case code of
-  Edge i j len position -> _
+concretizeElemCode :: WorldDimensions -> ElemCode -> Elem
+concretizeElemCode wd@(WD r (F2 w h) (F2 bw bh)) code = case code of
+  Edge i j len pos -> 
+    let o = F2 (fi i * bw - w/2) (h/2 - fi (j+1) * bh)
+        (a,b) = worldLine wd len pos
+    in RuleAB (o + a) (o + b)
   OutCorner i j ->
-    let cx = w/2 + fi i * bw
+    let cx = fi i * bw - w/2
         cy = h/2 - fi j * bh
     in Circle (F2 cx cy) r
 
@@ -91,11 +151,11 @@ sick 6 = (-1)
 sick 7 = 0
 
 concretizeMicro :: WorldDimensions -> MicroCode -> (Float2,Micro)
-concretizeMicro (WD r (F2 w h) (F2 bw hw)) (Site i j position u) =
-  let x = w/2 + fi i * bw
+concretizeMicro (WD r (F2 w h) (F2 bw bh)) (Site i j position u) =
+  let x = fi i * bw - w/2
       y = h/2 - fi j * bh
-      shiftX = cool position
-      shiftY = sick position
+      shiftX = cool position * r
+      shiftY = sick position * r
   in (F2 (x+shiftX) (y+shiftY), u)
 
 
@@ -108,6 +168,18 @@ boundingBoxI2 (I2 a b) (I2 c d) = [I2 x y | x <- [xmin .. xmax], y <- [ymin .. y
 
 radiusToBox :: Float2 -> Float -> (Float2,Float2)
 radiusToBox (F2 cx cy) r = (F2 (cx - r) (cy - r), F2 (cx + r) (cy + r))
+
+rayToCorners :: WorldDimensions -> Float2 -> Float2 -> [Int2]
+rayToCorners (WD _ (F2 w h) _) x v = [I2 i j | i <- [0..11], j <- [0..16]]
+--rayToCorners (WD _ (F2 w h) _) x v = []
+
+radiusToIndices :: WorldDimensions -> Float2 -> Float -> [Int2]
+radiusToIndices wd x r =
+  let (p1,p2) = radiusToBox x r
+      ix1 = mapXYToIJ wd p1
+      ix2 = mapXYToIJ wd p2
+  in boundingBoxI2 ix1 ix2
+
 
 -- map to the square index you're in
 -- don't use this when you're close to a square edge
@@ -187,10 +259,17 @@ genCorner ci cj (Ni _ _ _) rest = rest
 --  3
 genEdge :: Int -> Int -> Int -> Plat -> Pent Material -> Build (ElemCode,Plat)
 genEdge si sj side Air _                rest = rest
+genEdge si sj side c   (Pent M _ M _ O) rest = (Edge si sj ShortPlusR side, c) : rest
+genEdge si sj side c   (Pent O _ M _ M) rest = (Edge si sj ShortPlusL side, c) : rest
+genEdge si sj side c   (Pent M _ M _ M) rest = (Edge si sj Short side, c) : rest
+genEdge si sj side c   (Pent O _ M _ O) rest = (Edge si sj Long side, c) : rest
+
+{-
 genEdge si sj side c   (Pent O M M M O) rest = (Edge si sj Long side, c) : rest
 genEdge si sj side c   (Pent _ _ M M O) rest = (Edge si sj ShortPlusR side, c) : rest
 genEdge si sj side c   (Pent O M M _ _) rest = (Edge si sj ShortPlusL side, c) : rest
 genEdge si sj side c   _                rest = (Edge si sj Short side, c) : rest
+-}
 
 
 -- 0 1 2
@@ -199,23 +278,23 @@ genEdge si sj side c   _                rest = (Edge si sj Short side, c) : rest
 genMicros :: Int2 -> Quad Plat -> Build (MicroCode,[Plat])
 genMicros (I2 ci cj) (Quad Air Air Air Air) rest = rest
 -- flats
-genMicros (I2 ci cj) (Quad a   Air Air Air) rest = (Site ci cj 3 _, [a]) : (Site ci cj 5 _, [a]) : rest
-genMicros (I2 ci cj) (Quad Air b   Air Air) rest = (Site ci cj 5 _, [b]) : (Site ci cj 7 _, [b]) : rest
-genMicros (I2 ci cj) (Quad Air Air c   Air) rest = (Site ci cj 1 _, [c]) : (Site ci cj 3 _, [c]) : rest
-genMicros (I2 ci cj) (Quad Air Air Air d  ) rest = (Site ci cj 1 _, [d]) : (Site ci cj 7 _, [d]) : rest
+genMicros (I2 ci cj) (Quad a   Air Air Air) rest = (Site ci cj 3 ur, [a]) : (Site ci cj 5 ud, [a]) : rest
+genMicros (I2 ci cj) (Quad Air b   Air Air) rest = (Site ci cj 5 ud, [b]) : (Site ci cj 7 ul, [b]) : rest
+genMicros (I2 ci cj) (Quad Air Air c   Air) rest = (Site ci cj 1 uu, [c]) : (Site ci cj 3 ur, [c]) : rest
+genMicros (I2 ci cj) (Quad Air Air Air d  ) rest = (Site ci cj 1 uu, [d]) : (Site ci cj 7 ul, [d]) : rest
 -- flats
-genMicros (I2 ci cj) (Quad a   b   Air Air) rest = (Site ci cj 5 _, [a,b]) : rest
-genMicros (I2 ci cj) (Quad a   Air c   Air) rest = (Site ci cj 3 _, [a,c]) : rest
-genMicros (I2 ci cj) (Quad Air b   Air d  ) rest = (Site ci cj 7 _, [b,d]) : rest
-genMicros (I2 ci cj) (Quad Air Air c   d  ) rest = (Site ci cj 1 _, [c,d]) : rest
+genMicros (I2 ci cj) (Quad a   b   Air Air) rest = (Site ci cj 5 ud, [a,b]) : rest
+genMicros (I2 ci cj) (Quad a   Air c   Air) rest = (Site ci cj 3 ul, [a,c]) : rest
+genMicros (I2 ci cj) (Quad Air b   Air d  ) rest = (Site ci cj 7 ur, [b,d]) : rest
+genMicros (I2 ci cj) (Quad Air Air c   d  ) rest = (Site ci cj 1 uu, [c,d]) : rest
 -- corners
-genMicros (I2 ci cj) (Quad a   Air Air d  ) rest = (Site ci cj 2 _, [a,d]) : (Site ci cj 6 _, [a,d]) : rest
-genMicros (I2 ci cj) (Quad Air b   c   Air) rest = (Site ci cj 0 _, [b,c]) : (Site ci cj 4 _, [b,c]) : rest
+genMicros (I2 ci cj) (Quad a   Air Air d  ) rest = (Site ci cj 2 uur, [a,d]) : (Site ci cj 6 udl, [a,d]) : rest
+genMicros (I2 ci cj) (Quad Air b   c   Air) rest = (Site ci cj 0 uul, [b,c]) : (Site ci cj 4 udr, [b,c]) : rest
 -- corners
-genMicros (I2 ci cj) (Quad a   b   c   Air) rest = (Site ci cj 4 _, [b,c]) : rest
-genMicros (I2 ci cj) (Quad a   b   Air d  ) rest = (Site ci cj 6 _, [a,d]) : rest
-genMicros (I2 ci cj) (Quad a   Air c   d  ) rest = (Site ci cj 2 _, [a,d]) : rest
-genMicros (I2 ci cj) (Quad Air b   c   d  ) rest = (Site ci cj 0 _, [b,c]) : rest
+genMicros (I2 ci cj) (Quad a   b   c   Air) rest = (Site ci cj 4 udr, [b,c]) : rest
+genMicros (I2 ci cj) (Quad a   b   Air d  ) rest = (Site ci cj 6 udl, [a,d]) : rest
+genMicros (I2 ci cj) (Quad a   Air c   d  ) rest = (Site ci cj 2 uur, [a,d]) : rest
+genMicros (I2 ci cj) (Quad Air b   c   d  ) rest = (Site ci cj 0 uul, [b,c]) : rest
 genMicros (I2 ci cj) _                      rest = rest
 
 

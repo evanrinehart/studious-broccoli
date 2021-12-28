@@ -31,6 +31,7 @@ import CmdLine
 import CardGame
 import Arkanoid
 import Level
+import Grid
 
 
 -- concentrate on getting widgets to work
@@ -92,32 +93,52 @@ makeArena gfx (F4 x y w h) = do
 makeArkanoid gfx (F4 x y w h) = do
   canvas <- newCanvas (floor w) (floor h)
 
-  var1 <- newIORef (P (F2 160.00001 80) (F2 0 (-1)))
-  --var1 <- newIORef (P (F2 0 80) (F2 1.0000000 0))
+  ark <- fmap newArk (readLevelFile "levels/0")
+
+  --var1 <- newIORef (P (F2 159.99 80) (F2 0 (-1)))
+  var1 <- newIORef ark
   var2 <- newIORef (F2 0 0)
 
-  lvl <- readLevelFile "levels/0"
+  --let pd = PD (F2 0 (-150)) (F2 50 10) 0
 
   -- action wrapper maps "arena actions" to/from user actions properly
   let shift (F2 mx my) = F2 (mx - (x + w/2)) (my - (y + h/2))
 
-  let actions = pure (return ())
-{-
-  let actionWrapper = -- some of this is common to all widgets, foo is "custom"
-        shiftMouse shift .  -- shift mouse a fixed amount
-        cacheMouse var2 .   -- cache mouse locations to ref, provide mouse location
-        CardGame.foo .      -- remap useractions to cardgame actions, always require mouse location
-        cachedState var1 -- IORef s + s->s = IO ()  (inner action API)
--}
-  let render gfx canvas p = do
+  let actionWrapper =
+        shiftMouse shift .
+--        cacheMouse var2 .
+--        (\ua -> ua { uaMouse = \x y -> print (x,y) >> uaMouse ua x y }) .
+        cacheStateIgnore var1
+
+  let actions :: (UserActions (IO ())) = actionWrapper arkActions
+
+
+  let render gfx canvas (Ark lvl ball padx hist) = do
         useFBO (canvasFbo canvas)
         clearColorBuffer 0 0 0
-        let F2 x y = particlePosition p
+        let F2 x y = particlePosition ball
         withBlock gfx canvas $ \torch -> do
           torch (F4 (-160) (-240) 1 480) (F3 1 0 0)
           torch (F4 (-160) (-240) 320 1) (F3 1 0 0)
           torch (F4 (-160) 239 320 1) (F3 1 0 0)
           torch (F4 159 (-240) 1 480) (F3 1 0 0)
+
+          print (estimateVelocity (padx : hist))
+          let pd = makePadData padx
+          let box = padDataToBox pd
+          torch box (F3 0.5 0.5 0.5)
+
+          let (AL _ _ blocks) = lvl
+          forM_ (gridToList blocks) $ \((i,j),_) -> do
+            let p0 = fi i * 32 - 320/2
+            let p1 = 480/2 - fi (j+1)  * 32
+            torch (F4 p0 p1 32 32) (F3 1 1 0)
+{-
+            torch (F4 (-160) 208 32 32) (F3 1 0 1)
+            torch (F4 (-128) 208 32 32) (F3 1 1 0)
+            torch (F4 (-96)  208 32 32) (F3 0 1 1)
+            torch (F4 (-64)  208 32 32) (F3 0 1 0)
+-}
         withDisc gfx canvas $ \torch -> do
           torch (F2 x y) 5 (F3 0 1 0)
   
@@ -125,15 +146,10 @@ makeArkanoid gfx (F4 x y w h) = do
     widgetRepaint=readIORef var1 >>= render gfx canvas,
     widgetCanvas=canvas,
     widgetTime=do
-      p <- readIORef var1
-      --let (p',ces) = particle els mm p (1.0 / 4)
-      let env = makeEnv 0 lvl
-      --let (p',zs) = runWriter (particle env 128 p)
-      let dps = debugParticle env 1 p
-      putStrLn "==="
-      mapM_ print dps
-      let DP _ _ _ _ p' = last dps
-      writeIORef var1 p',
+      ark <- readIORef var1
+      let (ark',zs) = arkAction2 1 ark
+      if null zs then return () else print zs
+      writeIORef var1 ark',
     widgetArea=F4 x y w h,
     widgetActions=actions,
     widgetFinalize=deleteCanvas canvas
@@ -267,7 +283,7 @@ main = do
   --globalMouseTranslator win . quitOnEscape win
 
   -- let there be a connection between the user and... something
-  jackIn win (mainAction win arena debugger)
+  jackIn win (mainAction win arkanoid debugger)
 
   -- a clock used by the main loop
   ticker <- newTicker
@@ -338,6 +354,12 @@ cacheStateDoMsg var send ua = fmap f ua where
   f g = do
     msg <- atomicModifyIORef' var g
     send msg
+
+cacheStateIgnore :: Functor f => IORef a -> f (a -> (a,b)) -> f (IO ())
+cacheStateIgnore var ua = fmap f ua where
+  f g = do
+    _ <- atomicModifyIORef' var g
+    return ()
 
 cachedState :: Functor f => IORef a -> f (a -> a) -> f (IO ())
 cachedState var ua = fmap f ua where

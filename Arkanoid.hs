@@ -36,6 +36,44 @@ import Grid
 import Geometry
 
 import Level
+import Event
+
+
+data Ark = Ark
+  { arkLevel :: AbstractLevel
+  , arkBall  :: Particle
+  , arkPadX  :: Float
+  , arkPadXS :: [Float] }
+      deriving Show
+
+newArk lvl = Ark lvl (P (F2 100 (-150)) (F2 5 5)) 0 [0,0]
+
+-- mouse motion
+arkAction1 :: Float -> Ark -> (Ark, [At [Plat]])
+arkAction1 mx ark = (ark', []) where -- TODO
+  padx = arkPadX ark
+  padx' = min (160 - 25) (max ((-160) + 25) mx) -- clamp could be based on abstract level
+  ark' = ark { arkPadX = padx' }
+
+-- time
+arkAction2 :: Float -> Ark -> (Ark, [At [Plat]])
+arkAction2 limit ark =
+  let ball = arkBall ark
+      lvl = arkLevel ark
+      padx = arkPadX ark
+      hist = arkPadXS ark
+      wd = WD 5 (F2 320 480) (F2 32 32)
+      pd = PD (F2 padx (-150)) (F2 50 10) (estimateVelocity (padx : hist))
+      env = makeEnv wd pd lvl
+      (ball', hits) = runWriter (particle env 1 ball)
+  in (ark{ arkBall = ball', arkPadXS = take 2 (padx : hist)}, hits)
+
+
+arkActions :: UserActions (Ark -> (Ark, [At [Plat]]))
+arkActions = (pure (\ark -> (ark,[]))) { uaMouse = \x _ -> arkAction1 x }
+
+estimateVelocity :: [Float] -> Float
+estimateVelocity [a,b,c] = (a - c) / 2
 
 
 
@@ -47,7 +85,7 @@ data Particle = P !Float2 !Float2
 particlePosition :: Particle -> Float2
 particlePosition (P x _) = x
 
-propagateX dt x v = x + v .* dt
+propagateX dt x v    = x + v .* dt
 propagate dt (P x v) = P (x + v .* dt) v
 
 -- how fast is x moving toward line
@@ -61,8 +99,9 @@ altitudeRate x v la lb =
   sign * (v `cross2` n)
 
 -- if you're on the line, dt=zero
+-- if your coming from the wrong side, never hits
 particleHitsInfiniteLine :: Float2 -> Float2 -> Float2 -> Float2 -> Maybe (Float,Float2)
-particleHitsInfiniteLine x v la lb =
+particleHitsInfiniteLine x v la lb = if v `cross2` (lb - la) > 0 then Nothing else
   let vspeed = altitudeRate x v la lb
       p = closestPointOnLine x la lb 
       h = norm (x - p)
@@ -94,13 +133,15 @@ timeUntilCircle x v c r =
       let ans2 = (-b - sqrt h) / (2*a) in
       Just (min ans1 ans2, max ans1 ans2)
 
+-- if you're travling away from the center, never hits
 particleHitsCircle :: Float2 -> Float2 -> Float2 -> Float -> Maybe (Float,Float2)
-particleHitsCircle x v c r = case timeUntilCircle x v c r of
-  Nothing -> Nothing
-  Just (t1,t2)
-    | t2 < 0    -> Nothing
-    | t1 < 0    -> Just (t2, propagateX t2 x v)
-    | otherwise -> Just (t1, propagateX t1 x v)
+particleHitsCircle x v c r = if v `dot` (x - c) > 0 then Nothing else
+  case timeUntilCircle x v c r of
+    Nothing -> Nothing
+    Just (t1,t2)
+      | t2 < 0    -> Nothing
+      | t1 < 0    -> Just (t2, propagateX t2 x v)
+      | otherwise -> Just (t1, propagateX t1 x v)
 
 -- "one sided lines"
 intersectElement :: Float2 -> Float2 -> Elem -> Maybe (Float,Float2)
@@ -167,7 +208,7 @@ data Env a = Env
 particle :: Env a -> Float -> Particle -> Writer [At [a]] Particle
 particle env limit p_initial = loop 0 p_initial where
   loop t p@(P x v) = do
-    let radius = norm v * (limit - t)
+    let radius = norm v * (limit - t) * 1.05
     let elements = envMacroScan env x radius
     let hits = intersectElements p elements
     let microhits = envMicroScan env x v
@@ -185,9 +226,12 @@ particle env limit p_initial = loop 0 p_initial where
 debugParticle :: Show a => Env a -> Float -> Particle -> [DebugParticle]
 debugParticle env limit p_initial = loop 0 p_initial where
   loop t p@(P x v) =
-    let radius = norm v * (limit - t)
+    let radius = norm v * (limit - t) * 1.05
+--        elements = let foo = envMacroScan env x radius in traceShow foo foo
         elements = envMacroScan env x radius
+--        hits = let foo = intersectElements p elements in traceShow foo foo
         hits = intersectElements p elements
+--        microhits = let foo = envMicroScan env x v in traceShow foo foo
         microhits = envMicroScan env x v
     in case battle limit hits microhits of
       Nothing -> let p' = propagate (limit - t) p in [DP p (limit-t) [] Nothing p']
@@ -221,6 +265,63 @@ leavingMicroSite v (Corner n1 n2) =
   (v `dot` n1 >= 0) &&
   (v `dot` n2 >= 0) 
 
+
+data PadData = PD
+  { pdXY :: Float2
+  , pdWH :: Float2
+  , pdLateralV :: Float }
+      deriving Show
+
+makePadData :: Float -> PadData
+makePadData x = PD (F2 x (-150)) (F2 50 10) 0
+
+padDataToBox :: PadData -> Float4
+padDataToBox (PD (F2 x y) (F2 w h) _) = F4 (x - w/2) (y - h/2) w h
+
+concretizePad :: Float -> PadData -> [Elem]
+concretizePad r pd =
+  let F4 x y w h = padDataToBox pd
+      a = F2 x y
+      b = F2 x (y + h)
+      c = F2 (x + w) (y + h)
+      d = F2 (x + w) y
+      ud = F2 0 r
+      lr = F2 r 0
+  in [RuleAB (c+ud) (b+ud), RuleAB (b-lr) (a-lr), RuleAB (a-ud) (d-ud), RuleAB (d+lr) (c+lr)
+     ,Circle a r, Circle b r, Circle c r, Circle d r]
+
+makeEnv :: WorldDimensions -> PadData -> AbstractLevel -> Env Plat
+makeEnv wd pad al = Env elscan uscan where
+  elscan x r = padElems ++ (map f . M.toList . genElemCodes al) ixs where
+    ixs = radiusToIndices wd x r
+    f (code, plat) = (concretizeElemCode wd code, plat)
+    WD ballR _ _ = wd
+    padElems = map (\e -> (e, Pad)) (concretizePad ballR pad)
+  uscan x v  = important where
+    haystack = (map g . M.toList . genMicroCodes al) (rayToCorners wd x v)
+    important = concatMap f haystack
+    g (code, plats) = let (point,u) = concretizeMicro wd code in (point, (u,plats))
+    minsite = minimumBy (comparing (fst . snd)) (map h haystack)
+    h (point, _) =
+      let a = x
+          b = x + v
+          z = closestPointOnLine point a b
+          dd = norm (point - z)
+          ddd = norm (point - x)
+      in (point, (dd,ddd))
+    f (point, (u,plats)) =
+      let a = x
+          b = x + v
+          z = closestPointOnLine point a b
+          dt = norm (x - point) / norm v
+          dd = norm (point - x)
+      in if dd < 0.001 && not (leavingMicroSite v u) then [At dt point (u, plats)] else []
+
+-- data Env a = Env
+--  { envMacroScan :: Float2 -> Float  -> [(Elem,a)]
+--  , envMicroScan :: Float2 -> Float2 -> [At (Micro,[a])] } -- see notes on microscanning
+
+{-
 makeEnv :: Float -> AbstractLevel -> Env Plat
 makeEnv padx (AL w h blocks) = Env elscan uscan where
   a = F2 (-160) (-240)
@@ -240,3 +341,4 @@ makeEnv padx (AL w h blocks) = Env elscan uscan where
       then [At dt myX (corn,[Wall])]
       else []
         where corn = Corner (F2 (-1) 0) (F2 0 (-1))
+-}
