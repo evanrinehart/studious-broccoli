@@ -284,8 +284,8 @@ genMicros (I2 ci cj) (Quad Air Air c   Air) rest = (Site ci cj 1 uu, [c]) : (Sit
 genMicros (I2 ci cj) (Quad Air Air Air d  ) rest = (Site ci cj 1 uu, [d]) : (Site ci cj 7 ul, [d]) : rest
 -- flats
 genMicros (I2 ci cj) (Quad a   b   Air Air) rest = (Site ci cj 5 ud, [a,b]) : rest
-genMicros (I2 ci cj) (Quad a   Air c   Air) rest = (Site ci cj 3 ul, [a,c]) : rest
-genMicros (I2 ci cj) (Quad Air b   Air d  ) rest = (Site ci cj 7 ur, [b,d]) : rest
+genMicros (I2 ci cj) (Quad a   Air c   Air) rest = (Site ci cj 3 ur, [a,c]) : rest
+genMicros (I2 ci cj) (Quad Air b   Air d  ) rest = (Site ci cj 7 ul, [b,d]) : rest
 genMicros (I2 ci cj) (Quad Air Air c   d  ) rest = (Site ci cj 1 uu, [c,d]) : rest
 -- corners
 genMicros (I2 ci cj) (Quad a   Air Air d  ) rest = (Site ci cj 2 uur, [a,d]) : (Site ci cj 6 udl, [a,d]) : rest

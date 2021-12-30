@@ -93,6 +93,9 @@ makeArena gfx (F4 x y w h) = do
 makeArkanoid gfx (F4 x y w h) = do
   canvas <- newCanvas (floor w) (floor h)
 
+  let wd = WD 10 (F2 320 480) (F2 32 32)
+  let ap = AP wd (F2 50 10) (-150) 10 (F2 0 0, F2 1 1)
+
   ark <- fmap newArk (readLevelFile "levels/0")
 
   --var1 <- newIORef (P (F2 159.99 80) (F2 0 (-1)))
@@ -108,12 +111,12 @@ makeArkanoid gfx (F4 x y w h) = do
         shiftMouse shift .
 --        cacheMouse var2 .
 --        (\ua -> ua { uaMouse = \x y -> print (x,y) >> uaMouse ua x y }) .
-        cacheStateIgnore var1
+        cacheStateHandleAds var1 (\ads -> if null ads then return () else print ads)
 
-  let actions :: (UserActions (IO ())) = actionWrapper arkActions
+  let actions :: (UserActions (IO ())) = actionWrapper (arkActions ap)
 
 
-  let render gfx canvas (Ark lvl ball padx hist) = do
+  let render gfx canvas (Ark lvl ball padx) = do
         useFBO (canvasFbo canvas)
         clearColorBuffer 0 0 0
         let F2 x y = particlePosition ball
@@ -123,9 +126,8 @@ makeArkanoid gfx (F4 x y w h) = do
           torch (F4 (-160) 239 320 1) (F3 1 0 0)
           torch (F4 159 (-240) 1 480) (F3 1 0 0)
 
-          print (estimateVelocity (padx : hist))
-          let pd = makePadData padx
-          let box = padDataToBox pd
+          --print (estimateVelocity (padx : hist))
+          let box = padDataToBox ap padx
           torch box (F3 0.5 0.5 0.5)
 
           let (AL _ _ blocks) = lvl
@@ -140,15 +142,19 @@ makeArkanoid gfx (F4 x y w h) = do
             torch (F4 (-64)  208 32 32) (F3 0 1 0)
 -}
         withDisc gfx canvas $ \torch -> do
-          torch (F2 x y) 5 (F3 0 1 0)
+          torch (F2 x y) 10 (F3 0 1 0)
   
   return $ Widget{
     widgetRepaint=readIORef var1 >>= render gfx canvas,
     widgetCanvas=canvas,
     widgetTime=do
       ark <- readIORef var1
-      let (ark',zs) = arkAction2 1 ark
-      if null zs then return () else print zs
+      let (ark',zs) = arkTime ap 1 ark
+      if null zs
+        then return ()
+        else do
+          return ()
+          print zs
       writeIORef var1 ark',
     widgetArea=F4 x y w h,
     widgetActions=actions,
@@ -201,7 +207,7 @@ makeDebugger gfx (F4 x y w h) = do
             then torch c white black (I2 i 36)
             else torch c black white (I2 i 36),
     widgetActions=
-      cacheStateDoMsg var (fromMaybe (return ()) . fmap print) cmdLine
+      cacheStateHandleAds var (fromMaybe (return ()) . fmap print) cmdLine
   }
 
 
@@ -276,7 +282,7 @@ main = do
   (win,gfx) <- rainbow "o_O" (floor logicalW) (floor logicalH) scale -- create window load graphics
 
   debugger <- makeDebugger gfx (F4 (-320) (-240) 640 480)
-  arena    <- makeArena gfx (F4 (-320) (-240) 640 480)
+  --arena    <- makeArena gfx (F4 (-320) (-240) 640 480)
   arkanoid <- makeArkanoid gfx (F4 0 (-240) 320 480)
   --anim     <- makeAnimation gfx
 
@@ -294,16 +300,16 @@ main = do
     mlClock=ticker,
     mlDoEvents=GLFW.pollEvents,
     mlDoTick=do
-      widgetTime debugger
-      widgetTime arena
+      --widgetTime debugger
+      --widgetTime arena
       widgetTime arkanoid,
     mlRender=do
       clearColorBuffer 0 1 0
-      widgetRepaint debugger
-      widgetRepaint arena
+      --widgetRepaint debugger
+      --widgetRepaint arena
       widgetRepaint arkanoid
-      blitWidget gfx debugger
-      blitWidget gfx arena
+      --blitWidget gfx debugger
+      --blitWidget gfx arena
       blitWidget gfx arkanoid
       GLFW.swapBuffers win,
     mlDead=GLFW.windowShouldClose win
@@ -349,11 +355,11 @@ weird ref orig = orig{uaKeydown = g} where
       _         -> return ()
     uaKeydown orig key mods
 
-cacheStateDoMsg :: Functor f => IORef a -> (b -> IO ()) -> f (a -> (a,b)) -> f (IO ())
-cacheStateDoMsg var send ua = fmap f ua where
+cacheStateHandleAds :: Functor f => IORef a -> (b -> IO ()) -> f (a -> (a,b)) -> f (IO ())
+cacheStateHandleAds var h ua = fmap f ua where
   f g = do
-    msg <- atomicModifyIORef' var g
-    send msg
+    ads <- atomicModifyIORef' var g
+    h ads
 
 cacheStateIgnore :: Functor f => IORef a -> f (a -> (a,b)) -> f (IO ())
 cacheStateIgnore var ua = fmap f ua where
