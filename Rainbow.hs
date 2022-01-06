@@ -112,6 +112,12 @@ blitCanvas gfx cnv (F2 x y) = do
     R0
   renderQuad
 
+clearCanvas :: Float3 -> Canvas -> IO ()
+clearCanvas (F3 r g b) canvas = do
+  useFBO (canvasFbo canvas)
+  clearColorBuffer r g b
+  useFBO (FBO 0)
+
 loadBasicTile :: IO VBO
 loadBasicTile = storableVectorToVBO tileData
 
@@ -373,6 +379,7 @@ glfwRitual title w h scale = do
 
   Just win <- GLFW.createWindow (scale * w) (scale * h) title Nothing Nothing 
   GLFW.makeContextCurrent (Just win)
+  GLFW.swapInterval 1
 
   cullBackFaces -- debug only
 

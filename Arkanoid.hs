@@ -8,7 +8,7 @@ module Arkanoid where
 
 import Text.Printf
 
-import Data.Map as M (Map, fromList, toList, lookup)
+import Data.Map as M (Map, fromList, toList, lookup, findWithDefault)
 import qualified Data.IntMap.Strict as IM
 import Data.IntMap.Strict ((!))
 import Data.IntMap.Strict as IM
@@ -29,7 +29,9 @@ import Debug.Trace
 
 import Control.Exception
 import Control.Concurrent
+import Control.Concurrent.STM
 
+import Data.IORef
 import Test.QuickCheck
 
 import Common
@@ -38,6 +40,7 @@ import Geometry
 
 import Level
 import Event
+import Rainbow
 
 
 data Ark = Ark
@@ -55,7 +58,65 @@ data ArkParams = AP
   , apBallReset :: (Float2, Float2) }
 
 --newArk lvl = Ark lvl (P (F2 140.9538931 ((-15.65797986)+2.95048)) (F2 0.939692621 (-0.342020143))) 0
-newArk lvl = Ark lvl (P (F2 0 0) (F2 5 6)) 0
+
+-- steps is setting up Ark
+-- 1. obtain ArkParams (constants)
+-- 1. load a level
+-- 1. define screen area where widget goes
+-- 1. allocate new canvas
+-- 1. obtain home IORef for generating data source
+-- 1. wrap in widget
+-- 1. controller requires IORef and area for mouse translation
+-- 1. insert widget, insert controller
+
+newArkVar :: IO (IORef Ark, ArkParams, Float4 -> UserActions (IO ()))
+newArkVar = do
+  let r = 5
+  let wd = WD r (F2 320 480) (F2 32 32)
+  let ap = AP wd (F2 70 10) (-150) r (F2 0 0, F2 1 1)
+  let newArk lvl = Ark lvl (P (F2 0 0) (F2 4 4)) 0
+  lvl <- readLevelFile "levels/0"
+  ref <- newIORef (newArk lvl)
+
+  let actions area =
+        shiftMouse area .
+--        (\ua -> ua { uaMouse = \x y -> print (x,y) >> uaMouse ua x y }) .
+        cachedStateIgnore ref
+
+  --arkActions ap :: UserActions (Ark -> (Ark, [At [Plat]]))
+
+  return (ref, ap, \area -> actions area (arkActions ap))
+
+arkRender :: TVar (Map Char Float3) -> ArkParams -> GFX -> Canvas -> Ark -> IO ()
+arkRender mats ap gfx canvas (Ark lvl ball padx) = do
+  clearCanvas (F3 0 0 0) canvas
+  let F2 x y = particlePosition ball
+  withBlock gfx canvas $ \torch -> do
+    torch (F4 (-160) (-240) 1 480) (F3 1 0 0)
+    torch (F4 (-160) (-240) 320 1) (F3 1 0 0)
+    torch (F4 (-160) 239 320 1) (F3 1 0 0)
+    torch (F4 159 (-240) 1 480) (F3 1 0 0)
+
+    --print (estimateVelocity (padx : hist))
+    let box = padDataToBox ap padx
+    torch box (F3 0.5 0.5 0.5)
+
+    let (AL _ _ blocks) = lvl
+    forM_ (gridToList blocks) $ \((i,j), material) -> do
+      let p0 = fi i * 32 - 320/2
+      let p1 = 480/2 - fi (j+1)  * 32
+
+      cs <- atomically (readTVar mats)
+      torch (F4 p0 p1 32 32) (M.findWithDefault (F3 1 1 1) material cs)
+{-
+      torch (F4 (-160) 208 32 32) (F3 1 0 1)
+      torch (F4 (-128) 208 32 32) (F3 1 1 0)
+      torch (F4 (-96)  208 32 32) (F3 0 1 1)
+      torch (F4 (-64)  208 32 32) (F3 0 1 0)
+-}
+  withDisc gfx canvas $ \torch -> do
+    torch (F2 x y) (apBallRadius ap) (F3 0 1 0)
+  
 
 -- mouse motion
 arkMouse :: ArkParams -> Float -> Ark -> (Ark, [At [Plat]])
@@ -64,7 +125,7 @@ arkMouse ap mx ark = result where -- TODO
   WD _ (F2 ww wh) _ = apWorld ap
   F2 padw _ = apPadWH ap
   padx' = min (ww/2 - padw/2) (max ((-ww/2) + padw/2) mx) -- clamp could be based on abstract level
-  result = resolveOverlap ap ark{ arkPadX = padx' }
+  result = resolveOverlap ap padx padx' ark{ arkPadX = padx' }
 
 -- time
 arkTime :: ArkParams -> Float -> Ark -> (Ark, [At [Plat]])
@@ -75,12 +136,15 @@ arkTime ap limit ark =
       --hist = arkPadXS ark
       env = makeEnv ap padx lvl
       (ball', hits) = runWriter (particle env 1 ball)
-      P (F2 padx' _) _ = ball'
-  in (ark{ arkBall = ball', arkPadX = padx}, hits)
+      kludge = limitVelocity 8 . noHorizontal (pi/12)
+      f (P x v) = P x (kludge v)
+  in (ark{ arkBall = f ball', arkPadX = padx}, hits)
 
 
 arkActions :: ArkParams -> UserActions (Ark -> (Ark, [At [Plat]]))
-arkActions ap = (pure (\ark -> (ark,[]))) { uaMouse = \x _ -> arkMouse ap x }
+arkActions ap = (pure (\ark -> (ark,[])))
+  { uaMouse = \x _ -> arkMouse ap x 
+  , uaTick  = \limit -> arkTime ap limit }
 
 estimateVelocity :: [Float] -> Float
 estimateVelocity [a,b,c] = (a - c) / 2
@@ -89,21 +153,54 @@ estimateVelocity [a,b,c] = (a - c) / 2
 -- if the bat is overlapping the ball
 -- then move the ball and decide what to do with velocity
 -- avoid putting the ball through a wall, please
-resolveOverlap :: ArkParams -> Ark -> (Ark, [At [Plat]])
-resolveOverlap ap ark@(Ark al (P bx bv) padx) =
-  let hull = padToHull ap padx
+resolveOverlap :: ArkParams -> Float -> Float -> Ark -> (Ark, [At [Plat]])
+resolveOverlap ap padx padx' ark@(Ark al (P bx bv) _) =
+  let hull = padToHull ap padx'
   in case depthWithinHull bx hull of
     Nothing -> (ark, [])
     Just d  ->
-      let bv' = if bv `dot` d < 0 then reflect (normalize d) bv else bv -- this behavior sucks
-          bx' = bx + d .* 1.05
-      in (Ark al (P bx' bv') padx, [At 0 bx [Pad]])
+      let (bx',bv') = overlapStrike d bx bv (padx' - padx)
+          kludge = limitVelocity 8 . noHorizontal (pi / 12)
+      in (Ark al (P bx' (kludge bv')) padx', [At 0 bx [Pad]])
+
+overlapStrike :: Float2 -> Float2 -> Float2 -> Float -> (Float2, Float2)
+overlapStrike d x v@(F2 v0 v1) batDx =
+  let strength = (abs batDx - 1) / 1 + 1
+      fuck = max 1 (batDx / 10)
+      vb = F2 (if fuck `overtakes` v0 then fuck else v0 * 1.1) 0
+      v' = v - vb
+      v'' = reflect (normalize d) v'
+      v''' = v'' + vb
+  in trace "overlap strike" (x + d .* 2, v''')
+--  in if not (v' `dot` d < 0) then error (show (d,deltaV,v,v')) else (x + d .* 1.05, v''')
+--  in error (show (v,v',v'',v'''))
+
+overtakes :: Float -> Float -> Bool
+overtakes x y = if x > 0 then x > y else x < y
 
 outOfBounds :: ArkParams -> Float2 -> Bool
 outOfBounds ap (F2 x y) =
   let WD _ (F2 w h) _ = apWorld ap
       r = apBallRadius ap
   in x - r <= -w/2 || x + r >= w/2 || y + r >= h/2
+
+limitVelocity :: Float -> Float2 -> Float2
+limitVelocity limit v =
+  let s = norm v in
+  if s > limit
+    then (v ./ s) .* limit
+    else v
+
+noHorizontal :: Float -> Float2 -> Float2
+noHorizontal limit v@(F2 v0 v1) =
+  let xsign = f (signum v0)
+      ysign = f (signum v1)
+      f 0     = 1
+      f other = other
+      x = abs v0
+      y = abs v1
+      m = norm v
+  in if atan (y/x) < limit-0.01 then m *. F2 (xsign * cos limit) (ysign * sin limit) else v
 
 
 -- PARTICLE PHYSICS
@@ -401,9 +498,6 @@ data PadData = PD
   , pdWH :: !Float2
   , pdLateralV :: !Float }
       deriving Show
-
-makePadData :: Float -> PadData
-makePadData x = PD (F2 x (-150)) (F2 50 10) 0
 
 padDataToBox :: ArkParams -> Float -> Float4
 padDataToBox ap padx = F4 (x - w/2) (y - h/2) w h where

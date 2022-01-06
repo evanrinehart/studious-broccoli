@@ -199,7 +199,7 @@ platToMat Air = O
 platToMat _   = M
 
 lvlIndex :: Int -> Int -> AbstractLevel -> Plat
-lvlIndex i j (AL w h blocks) = if j < 0 || i < 0 || i >= w
+lvlIndex i j (AL w h blocks) = if j < 0 || i < 0 || i >= w || j >= h
   then Wall
   else case gridLookup i j blocks of Just _ -> Block i j; Nothing -> Air
 
