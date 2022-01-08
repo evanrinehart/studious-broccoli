@@ -35,6 +35,11 @@ module Device (
 
   -- * Debugging
 
+  newCacheDebug,
+  newMailboxDebug,
+  debug,
+  debugGuts
+
 {-
   Varying(..),
   Occurring(..),
@@ -305,8 +310,7 @@ ex = runPlan 1 $ do
   out1 <- newCache (\l c y -> (y <> y, succ c)) 'c' (pure [5]) :: Plan z (Spy z TF [Double])
   out2 <- newCacheDebug "var1" (\l c y -> (y <> y <> y, succ c)) 'c' (pure []) :: Plan z (Spy z TF [Double])
   return $ \d -> do
-    let (DGuts gs) = d
-    putStrLn (debugGuts gs)
+    putStrLn (debug d)
 
 debugFormatStr = "%10s %10s %20s %15s %15s"
 debugFormat :: String -> String -> String -> String -> String -> String
@@ -317,7 +321,7 @@ debugFormat a b c d e = printf debugFormatStr as bs cs ds es where
   ds = take 15 d
   es = take 15 e
 
-debugGuts :: Guts z -> String
+debugGuts :: Guts z -> [String]
 debugGuts d =
   let pile = gutsMail d
       boxes = gutsBoxes d
@@ -328,7 +332,7 @@ debugGuts d =
       heading = debugFormat (showFFloat (Just 6) delta "")  "type" "meat" "oldBone" "newBone"
       mailReports = map (\box -> Mail.report box (\a b -> debugFormat a "(mailbox)" b "" "") pile) boxes
       cacheReports = toList (V.zipWith debugCache debug (V.zip old new))
-  in unlines (heading : mailReports ++ cacheReports)
+  in heading : mailReports ++ cacheReports
 
 debugCache :: Some CacheDebug -> (Wrap2, Wrap2) -> String
 debugCache (Some (CacheDebug l shMeat shBones)) (Wrap2 _ oldBone, Wrap2 meat newBone) =
@@ -337,7 +341,13 @@ debugCache (Some (CacheDebug l shMeat shBones)) (Wrap2 _ oldBone, Wrap2 meat new
       d = shBones (unsafeCoerce oldBone)
       e = shBones (unsafeCoerce newBone)
   in debugFormat l "(cache)" c d e
-  
+
+debug :: Device z -> String
+debug dev = unlines (innerDebug dev [])
+
+innerDebug :: Device z -> [String] -> [String]
+innerDebug (DGuts d) = (debugGuts d ++)
+innerDebug (DGlue b1 b2) = innerDebug b1 . innerDebug b2 
 
 -- move forward in time, preserving mail by splitting and forgetting
 shiftKeepMail :: Time -> Guts z -> Guts z
