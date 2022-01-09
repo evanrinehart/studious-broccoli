@@ -13,9 +13,8 @@
 module Device (
   -- * Device
   Device,
-  look,
-  write,
-  WriteMe,
+  View,
+  Editor,
 
   -- * Plan
   --
@@ -23,22 +22,22 @@ module Device (
 
   Plan,
   newCache,
-  newMailbox,
+  newInputbox,
   runPlan,
-  Spy,
 
   -- * Device Sandwich
 
-  Sandwich(..),
+  Sandwich,
+  item,
+  (<<<),
   readSandwich,
   writeSandwich,
 
   -- * Debugging
 
-  newCacheDebug,
-  newMailboxDebug,
   debug,
-  debugGuts
+  --newCacheDebug,
+--  newMailboxDebug,
 
 {-
   Varying(..),
@@ -83,16 +82,15 @@ import Debug.Trace
 --
 -- The @z@ parameter protects devices with incompatible internal structure from being mixed.
 -- 
--- Use 'look' to view the device. It takes a 'Spy' which defines how you want the data. The
+-- Use 'look' to view the device. It takes a 'View' which defines how you want the data. The
 -- value returned from 'look' represents a value throughout the 'Device' time span. You can then
 -- sample it or take an average over the window, for example, to get concrete data.
 --
--- Use 'write' to influence the behavior of the device. It requires a 'WriteMe', which is
--- a reference to a mailbox (see 'newMailbox'). Mailbox values are also extended in time, and
--- will be merged with the existing mail through the 'Monoid' instance for your chosen container.
+-- Use 'edit' to influence the behavior of the device. It requires an 'Editor', which is
+-- a reference to a mailbox (see 'newMailbox'). Mailbox values are also extended in time.
 -- See the 'Q' type for an example.
 --
--- Use 'next' to get a future time window of any device.
+-- Use 'next' to get a future time window of any device. Any mailboxes begin the new window empty.
 --
 -- Using 'cut' and 'glue' we can experiment with alternative histories in the same span of time.
 data Device z = DGuts (Guts z) | DGlue (Device z) (Device z)
@@ -109,20 +107,23 @@ data Guts z = Guts
 
 type Plan z a = State (PlanState z) a
 
--- | A mailbox reference. See 'newMailbox'.
-newtype WriteMe z f m = WriteMe (Device z -> f m -> Device z)
+-- | BAD DOCS, BAD A mailbox reference. See 'newMailbox'.
+type Editor z f a = (f a -> f a) -> Device z -> Device z
+--newtype EditMe z f m = EditMe (Device z -> (f m -> f m) -> Device z)
 
 -- | A method of computing views of a device.
 --
 -- see 'look', 'newCache', 'newMailbox'
-newtype Spy z f a = Spy (MeatBoneCache -> MailPile -> f a)
+type View z f a = Device z -> f a
+
+newtype Viewer z f a = Viewer (MeatBoneCache -> MailPile -> f a)
 
 -- | Continue to the next time window.
 nextDevice :: Time -- ^ How long the next time window will be.
      -> Device z
      -> Device z
 nextDevice newDelta d
-  | newDelta < 0    = error ("next: next window size negative (" ++ show newDelta ++ ")")
+  | newDelta < 0    = error ("next: next window length negative (" ++ show newDelta ++ ")")
   | otherwise = DGuts (shiftNoMail newDelta (finalGuts d))
 
 finalGuts :: Device z -> Guts z
@@ -130,10 +131,10 @@ finalGuts (DGuts d)     = d
 finalGuts (DGlue _ b2) = finalGuts b2
 
 -- | Observe a 'Device' some way.
--- Get some interesting 'Spy's from 'newMailbox' or 'newCache'. Combine them with 'Functor'
+-- Get some interesting 'View's from 'newMailbox' or 'newCache'. Combine them with 'Functor'
 -- 'Applicative' and 'Monoid'.
-look :: Splice f => Spy z f a -> Device z -> f a
-look (Spy f) (DGuts d) = f (gutsNew d) (gutsMail d)
+look :: Shift f => Viewer z f a -> Device z -> f a
+look (Viewer f) (DGuts d) = f (gutsNew d) (gutsMail d)
 look spy (DGlue b1 b2) =
   let a = look spy b1
       b = look spy b2
@@ -141,15 +142,15 @@ look spy (DGlue b1 b2) =
   in wsplice t a (wshift t b)
 
 -- | Merge a window of data into this mailbox.
-write :: (Splice f, Monoid (f m)) => WriteMe z f m -> Device z -> f m -> Device z
-write (WriteMe merge) d msg = merge d msg
+edit :: Splice f => Editor z f m -> Device z -> (f m -> f m) -> Device z
+edit inner d f = inner f d
 
 -- | Every device has a finite lifetime. This is that.
 deviceSize :: Device z -> Time
 deviceSize (DGuts d) = gutsSize d
 deviceSize (DGlue b1 b2) = deviceSize b1 + deviceSize b2
 
--- | The inverse of 'glue'. Succeeds only if cut time is greater than zero and less than 'size'.
+-- | The inverse of 'glue'. Succeeds only if cut time is greater than zero and less than 'lifetime'.
 cutDevice :: Time -> Device z -> Maybe (Device z, Device z)
 cutDevice t dev = case innerCut t dev of
   Cutted l r -> Just (l,r)
@@ -181,22 +182,6 @@ data Cutting z = OffLeft | OffRight | Cutted (Device z) (Device z)
 glueDevice :: Device z -> Device z -> Device z
 glueDevice = DGlue
 
--- implementation notes... *HERE*
--- operations to be preserved on a device
---   look  :: Spy z a -> Device z -> a                   (function of mail and meat)
---   write :: WriteMe z m -> Device z -> m -> Device z   (mappend to mailbox, but if device is split?)
---   cut   :: Time -> Device z -> (Device z, Device z)   (forget and shift some mail)
---   cat   :: Device z -> Device z -> Device z           (group devices, defer operations?)
---   next  :: Time -> Device z -> Device z               (new bones now old, regenerate meat)
---   size  :: Device z -> Time                           (sum of component sizes)
-
--- we can do all this if every 'windowable' type supports
--- |
-
--- if the window boundaries are "understood" then wcut is really a shift
--- wglue is a shift and a replacement prior to some time
--- either way, the data can be shifted
-
 
 -- |Add a cached state to this device. It can be used as memory or an integrator.
 --
@@ -205,64 +190,75 @@ glueDevice = DGlue
 -- The observable output @g b@, known as the /meat/ represents anything that happens in between.
 -- Note that bones pertain to points in time, unlike meat which extends over finite time.
 --
--- Note the generator gets size and input from the current time window, not previous.
+-- Note the generator gets length and input from the current time window, not previous.
 --
 -- New bones are carried into the future via 'next' then evaluated to WHNF, becoming old in the process.
 -- They can be used to speed up behaviors that depend on accumulated history.
-newCache :: (Time -> s -> f a -> (g b,s)) -- ^How to compute output window from input window, state, and new window size
+newCache :: Splice g
+         => (Time -> s -> f a -> (g b,s)) -- ^How to compute output window from input window, state, and new window length
          -> s -- ^Initial seed state.
-         -> Spy z f a -- ^Input window
-         -> Plan z (Spy z g b)
-newCache f base (Spy input) = do
+         -> View z f a -- ^Input window
+         -> Plan z (View z g b)
+newCache f base inputView = do
   k <- newBase Proxy base
-  addRegen (\dt old new mail -> wrap2 (f dt (snd (old ! k)) (input new mail)))
+  addRegen (\dt old new mail -> wrap2 (f dt (snd (old ! k)) (inputView (dummyDevice new mail))))
   addCacheDebug (Some $ CacheDebug "unnamed" (const "?") (const "?"))
-  return $ Spy (\cache boxes -> fst (cache ! k))
+  let viewer = Viewer (\cache boxes -> fst (cache ! k))
+  return (look viewer)
+
+dummyDevice :: MeatBoneCache -> MailPile -> Device z
+dummyDevice cache pile = DGuts (Guts bomb cache pile bomb bomb bomb bomb) where
+  bomb = error "(bug) some of the dummy device fields were used after all?"
+
+{-
 
 -- | Same as 'newCache' but takes a label and 'Show' instances for a better 'debug' report.
 newCacheDebug :: forall z s f a g b . (Show (g b), Show s)
-   => String
-   -> (Time -> s -> f a -> (g b,s)) -- ^How to compute output window from input window, state, and new window size
+   => String -- ^ Label for this cache. Displays in the debug output.
+   -> (Time -> s -> f a -> (g b,s)) -- ^How to compute output window from input window, state, and new window length
    -> s -- ^Initial seed state.
-   -> Spy z f a -- ^Input window
-   -> Plan z (Spy z g b)
-newCacheDebug l f base (Spy input) = do
+   -> View z f a -- ^Input window
+   -> Plan z (View z g b)
+newCacheDebug l f base (View input) = do
   k <- newBase Proxy base
   addRegen (\dt old new mail -> wrap2 (f dt (snd (old ! k)) (input new mail)))
   addCacheDebug (Some $ CacheDebug l (show :: g b -> String) (show :: s -> String))
-  return $ Spy (\cache boxes -> fst (cache ! k))
+  return $ View (\cache boxes -> fst (cache ! k))
+-}
 
--- |Add a new mailbox to this device. A mailbox's value spans the same time window
--- as the device. The 'Monoid' instance should merge two equally sized windows of mail.
+-- | Add a new input box to this device. Input boxes can be viewed or edited.
 --
--- The returned 'Spy' can be used to observe the mailbox.
+-- The observed value of an input box represents data spread over the device lifetime.
 --
--- Once the device is constructed, 'write' can be used to update the mailbox.
---
--- Mail data that lies outside the device's time window has no effect.
-newMailbox ::
-  forall z f m . (Splice f, Monoid (f m)) => Plan z (Spy z f m, WriteMe z f m)
-newMailbox = do
+-- By default, on device creation or 'next', the box is empty. After this the box
+-- value may be arbitrarily edited using the 'Editor'.
+newInputbox :: Splice f
+           => f m -- ^ Used as the initial, empty, default, no signal value.
+           -> Plan z (View z f m, Editor z f m)
+newInputbox iv = do
   g <- gets psGen2
   let (k, g') = Mail.genKey g
-  let box = Mail.box "unnamed" (const "?") wshift mempty mappend k
+  let box = Mail.box "unnamed" (const "?") wshift iv k
   let someBox = Mail.some box
   modify (\ps -> ps { psGen2 = g', psMailboxes = psMailboxes ps ++ [someBox] })
-  let sig = Spy (\cache pile -> Mail.getMail k mempty pile)
-  return (sig, WriteMe (deliver box))
+  let sig = Viewer (\cache pile -> Mail.getMail k iv pile)
+  return (look sig, deliver box)
 
 
+{-
 -- | Same as 'newMailbox' but takes a label and a Show instance. This is used by the 'debug' report.
-newMailboxDebug ::
-  forall z f m . (Splice f, Monoid (f m), Show (f m)) => String -> Plan z (Spy z f m, WriteMe z f m)
+newMailboxDebug :: forall z f m . (Splice f, Monoid (f m), Show (f m)) 
+                => String -- ^ Label for this mailbox. Displays in the debug output.
+                -> Plan z (View z f m, WriteMe z f m)
 newMailboxDebug l = do
   g <- gets psGen2
   let (k, g') = Mail.genKey g
   let box = Mail.box l show wshift mempty mappend k
   let someBox = Mail.some box
   modify (\ps -> ps { psGen2 = g', psMailboxes = psMailboxes ps ++ [someBox] })
-  let sig = Spy (\cache pile -> Mail.getMail k mempty pile)
+  let sig = View (\cache pile -> Mail.getMail k mempty pile)
   return (sig, WriteMe (deliver box))
+-}
 
 -- |Create a 'Device' according to the plan. Uses rank 2 polymorphism to isolate
 -- references from the wrong devices.
@@ -273,7 +269,7 @@ newMailboxDebug l = do
 -- This formulation stops mixing devices with incompatible structure. But it also
 -- stops composition of compatible devices that come from two places. Would encoding
 -- the entire structure in the type parameter work out nicely?
-runPlan :: Time -- ^ The size of the first window
+runPlan :: Time -- ^ The length of the first window
         -> (forall z . Plan z (Device z -> b)) -- ^ Plan should result in a callback to receive and use the new Device
         -> b
 runPlan initialDelta plan =
@@ -305,12 +301,12 @@ type DNA = V.Vector Regen
 
 ex :: IO ()
 ex = runPlan 1 $ do
-  (spy1 :: Spy z Q (), box1) <- newMailboxDebug "box1"
-  (spy2 :: Spy z Q (), box2) <- newMailbox
-  out1 <- newCache (\l c y -> (y <> y, succ c)) 'c' (pure [5]) :: Plan z (Spy z TF [Double])
-  out2 <- newCacheDebug "var1" (\l c y -> (y <> y <> y, succ c)) 'c' (pure []) :: Plan z (Spy z TF [Double])
+--  (spy1 :: View z Q (), box1) <- newMailboxDebug "box1"
+  (spy2 :: View z Q (), box2) <- newInputbox (Q [])
+  out1 <- newCache (\l c y -> (y <> y, succ c)) 'c' (const (pure [5])) :: Plan z (View z TF [Double])
+--  out2 <- newCacheDebug "var1" (\l c y -> (y <> y <> y, succ c)) 'c' (pure []) :: Plan z (View z TF [Double])
   return $ \d -> do
-    putStrLn (debug d)
+    putStrLn (debug (d `glue` d))
 
 debugFormatStr = "%10s %10s %20s %15s %15s"
 debugFormat :: String -> String -> String -> String -> String -> String
@@ -342,6 +338,8 @@ debugCache (Some (CacheDebug l shMeat shBones)) (Wrap2 _ oldBone, Wrap2 meat new
       e = shBones (unsafeCoerce newBone)
   in debugFormat l "(cache)" c d e
 
+-- | Show internal data on a device. By default most values are unreadable.
+-- But see 'newCacheDebug' and 'newMailboxDebug'.
 debug :: Device z -> String
 debug dev = unlines (innerDebug dev [])
 
@@ -360,8 +358,8 @@ shiftNoMail :: Time -> Guts z -> Guts z
 shiftNoMail newDelta (Guts _ nowOldBones _ _ dna boxes debug) =
   guts nowOldBones noMail newDelta dna boxes debug
 
-deliverGuts :: Mailbox (f m) -> f m -> Guts z -> Guts z
-deliverGuts box msg d = d { gutsMail = Mail.insert box msg (gutsMail d) }
+deliverGuts :: Mailbox (f m) -> (f m -> f m) -> Guts z -> Guts z
+deliverGuts box f d = d { gutsMail = Mail.edit box f (gutsMail d) }
 
 {-
 -- Put m in device mailbox then regenerate meatbone cache from old bones.
@@ -372,16 +370,15 @@ editGutsMail k (Guts old _ mail delta dna forgetter debugger) x =
   in guts old mail' delta dna forgetter debugger
 -}
 
-deliver :: (Splice f, Monoid (f m)) => Mailbox (f m) -> Device z -> f m -> Device z
-deliver box (DGuts someGuts) x = DGuts (deliverGuts box x someGuts)
-deliver box (DGlue b1 b2) x = 
-  let (l,r) = wcut (lifetime b1) x
-      c1 = deliver box b1 l
-      c2 = deliver box b2 r
+deliver :: Splice f => Mailbox (f m) -> (f m -> f m) -> Device z -> Device z
+deliver box f (DGuts someGuts) = DGuts (deliverGuts box f someGuts)
+deliver box f (DGlue b1 b2) = 
+  let c1 = deliver box f b1
+      c2 = deliver box (shiftEdit (lifetime b1) f) b2
   in DGlue c1 c2
 
-wcut :: Splice f => Time -> f a -> (f a, f a)
-wcut t x = (x, wshift (-t) x)
+shiftEdit :: Splice f => Time -> (f m -> f m) -> f m -> f m
+shiftEdit dt f = wshift (negate dt) . f . wshift dt
 
 data KeyGen ph = KeyGen Int
 genKey :: KeyGen ph -> a -> (Key ph a, Wrap, KeyGen ph)
@@ -403,19 +400,20 @@ addRegen regen = modify (\ps -> ps { psRegens = psRegens ps ++ [regen] })
 addCacheDebug :: Some CacheDebug -> Plan z ()
 addCacheDebug x = modify (\ps -> ps { psCacheDebugs = psCacheDebugs ps ++ [x] })
 
+{-
+instance Functor f => Functor (Viewer z f) where
+  fmap f (View g) = View (\cache boxes -> fmap f (g cache boxes))
 
-instance Functor f => Functor (Spy z f) where
-  fmap f (Spy g) = Spy (\cache boxes -> fmap f (g cache boxes))
+instance Applicative f => Applicative (View z f) where
+  pure x = View (\_ _ -> pure x)
+  (View ff) <*> (View xx) = View (liftA2 (liftA2 (<*>)) ff xx)
 
-instance Applicative f => Applicative (Spy z f) where
-  pure x = Spy (\_ _ -> pure x)
-  (Spy ff) <*> (Spy xx) = Spy (liftA2 (liftA2 (<*>)) ff xx)
-
-instance (Applicative f, Semigroup m) => Semigroup (Spy z f m) where
+instance (Applicative f, Semigroup m) => Semigroup (View z f m) where
   (<>) = liftA2 (<>)
 
-instance (Applicative f, Monoid m) => Monoid (Spy z f m) where
+instance (Applicative f, Monoid m) => Monoid (View z f m) where
   mempty = pure mempty
+-}
 
 
 
@@ -481,12 +479,18 @@ instance Editable (Device z) where
 
 data Tree a = Leaf a | Fork a (Tree a) (Tree a)
 
+-- | One way to compose different 'Device's is to choose 1 input and 1 output of each and pipe them.
 data Sandwich :: Tree * -> * -> * -> * where
-  Item :: (Splice f, Splice g, Monoid (f i)) => WriteMe z f i -> Spy z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
+  Item :: (Splice f, Splice g) => Editor z f i -> View z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
   Pile :: Splice h => Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
 
-o :: Splice h => Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
-o = Pile
+-- | Lift a 'Device' along with 1 input and 1 output into a singleton 'Sandwich'
+item :: (Splice f, Splice g) => Editor z f i -> View z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
+item = Item
+
+-- | Compose two 'Device' 'Sandwich'es such that the output of one is piped as the input to the other.
+(<<<) :: Splice h => Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
+s2 <<< s1 = Pile (writeSandwich (const (readSandwich s1)) s2) s1
 
 instance Film (Sandwich zs a b) where
   lifetime (Item _ _ d) = lifetime d
@@ -504,14 +508,59 @@ instance Editable (Sandwich zs a b) where
   glue (Item box spy d1) (Item _ _ d2) = Item box spy (glue d1 d2)
   glue (Pile x1 y1) (Pile x2 y2) = Pile (glue x1 x2) (glue y1 y2)
 
+-- | View the output from the last device in the chain.
 readSandwich :: Sandwich zs a (g o) -> g o
-readSandwich (Item _ spy d) = look spy d
+readSandwich (Item _ view d) = view d
 readSandwich (Pile s1 s2) = readSandwich s1
 
-writeSandwich :: f i -> Sandwich zs (f i) b -> Sandwich zs (f i) b
-writeSandwich msg (Item box spy d) = Item box spy (write box d msg)
-writeSandwich msg (Pile s1 s2) =
-  let s2' = writeSandwich msg s2
-      x = readSandwich s2'
-      s1' = writeSandwich x s1
-  in Pile s1' s2'
+-- | Edit the input of the first device in the chain, updating everything down the line.
+writeSandwich :: (f i -> f i) -> Sandwich zs (f i) b -> Sandwich zs (f i) b
+writeSandwich f (Item box spy d) = Item box spy (edit box d f)
+writeSandwich f (Pile s2 s1) =
+  let s1' = writeSandwich f s1
+      x = readSandwich s1'
+      s2' = writeSandwich (const x) s2
+  in Pile s2' s1'
+
+-- single out a device input and output for pipe purposes
+data DevicePipe :: * -> * -> * where
+  DP :: (Splice f, Splice g) => Editor z f i -> View z g o -> Device z -> DevicePipe (f i) (g o)
+
+
+{- your device with hidden state and bundled environment that can be arbitrarily modified
+-- is a form of Store comonad.
+
+look :: WrappedDevice a b -> b
+edit :: (a -> a) -> WrappedDevice a b -> WrappedDevice a b
+
+-- should the stuff be stored bundled after all?
+-- if we move it out, then the remaining bits become a category, even encapsulable as a function
+-}
+
+
+{- the glue operation that requires so much extra type level fu can be eliminated by having
+-- time-concat happen at the next higher level. I.e. glue :: [Device] -> [Device] -> [Device]
+-- is simply concat. If you can cut a device into two, you can cut a [Device] into two [Device]'s.
+-- This is more beautiful.
+--
+-- Now with less type variables a possibly glued [Device] can still be cut, and extended in time.
+--
+-- If you single out a device's inputs and outputs, hide the z, make pipes... then the pipes can also
+-- be glued and cut.
+
+-- remove gluing from the guts
+-}
+
+
+data HabList a
+  = Hab a
+  | a :| HabList a
+      deriving (Eq,Ord,Show,Read,Functor,Foldable)
+
+instance Semigroup (HabList a) where
+  Hab x <> more     = x :| more
+  (x :| xs) <> more = x :| (xs <> more)
+
+type GluedDevice z = HabList (Device z)
+
+instance Film (GluedDevice z)
