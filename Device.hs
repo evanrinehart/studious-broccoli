@@ -9,6 +9,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Device (
   -- * Device
@@ -33,6 +35,15 @@ module Device (
   readSandwich,
   writeSandwich,
 
+  -- * Profunctor Stuff
+  F(..),
+  Snip(..),
+  Guest(..),
+  host,
+  Burn(..),
+  Glue(..),
+  guestDevice,
+
   -- * Debugging
 
   debug,
@@ -54,10 +65,14 @@ import qualified Data.Vector as V
 import Data.Vector (Vector)
 import Control.Applicative
 import Control.Monad.State
+import Control.Comonad
+import Control.Category
+import Control.Arrow
+import Data.Profunctor
 import Unsafe.Coerce (unsafeCoerce)
 import qualified Data.IntMap as IM
 import Data.Proxy
-import Prelude hiding (splitAt)
+import Prelude hiding (splitAt, id, (.))
 import Text.Printf
 import Data.Foldable
 import Numeric
@@ -93,7 +108,8 @@ import Debug.Trace
 -- Use 'next' to get a future time window of any device. Any mailboxes begin the new window empty.
 --
 -- Using 'cut' and 'glue' we can experiment with alternative histories in the same span of time.
-data Device z = DGuts (Guts z) | DGlue (Device z) (Device z)
+
+type Device z = Guts z
 
 data Guts z = Guts
   { gutsOld    :: MeatBoneCache
@@ -118,37 +134,48 @@ type View z f a = Device z -> f a
 
 newtype Viewer z f a = Viewer (MeatBoneCache -> MailPile -> f a)
 
+
+
+-- | Retrospectively, we can repackage a Device as a Guest ?
+guestDevice :: Device z -> Editor z f a -> View z g b -> Guest (f a) (g b)
+guestDevice d0 edit view = Guest d0 (F gen) where
+  gen l fa dev =
+    let dev' = edit (const fa) dev
+        dna = gutsDNA dev
+        boxes = gutsBoxes dev
+        debug = gutsDebug dev
+        dev'' = guts (gutsOld dev) (gutsMail dev') l dna boxes debug
+    in (view dev'', dev'')
+
+{-
+guts :: MeatBoneCache -> MailPile -> Time -> DNA -> Mailboxes -> CacheView -> Guts z
+guts old mail delta dna boxes debug = 
+  let new = Cache2 (V.map (\f -> f delta old new mail) dna)
+  in evaluateBones old `seq` Guts old new mail delta dna boxes debug
+-}
+
+
 -- | Continue to the next time window.
 nextDevice :: Time -- ^ How long the next time window will be.
      -> Device z
      -> Device z
 nextDevice newDelta d
   | newDelta < 0    = error ("next: next window length negative (" ++ show newDelta ++ ")")
-  | otherwise = DGuts (shiftNoMail newDelta (finalGuts d))
-
-finalGuts :: Device z -> Guts z
-finalGuts (DGuts d)     = d
-finalGuts (DGlue _ b2) = finalGuts b2
+  | otherwise = shiftNoMail newDelta d
 
 -- | Observe a 'Device' some way.
 -- Get some interesting 'View's from 'newMailbox' or 'newCache'. Combine them with 'Functor'
 -- 'Applicative' and 'Monoid'.
-look :: Shift f => Viewer z f a -> Device z -> f a
-look (Viewer f) (DGuts d) = f (gutsNew d) (gutsMail d)
-look spy (DGlue b1 b2) =
-  let a = look spy b1
-      b = look spy b2
-      t = lifetime b1
-  in wsplice t a (wshift t b)
+look :: Viewer z f a -> Device z -> f a
+look (Viewer f) d = f (gutsNew d) (gutsMail d)
 
 -- | Merge a window of data into this mailbox.
-edit :: Splice f => Editor z f m -> Device z -> (f m -> f m) -> Device z
+edit :: Editor z f m -> Device z -> (f m -> f m) -> Device z
 edit inner d f = inner f d
 
 -- | Every device has a finite lifetime. This is that.
 deviceSize :: Device z -> Time
-deviceSize (DGuts d) = gutsSize d
-deviceSize (DGlue b1 b2) = deviceSize b1 + deviceSize b2
+deviceSize d = gutsSize d
 
 -- | The inverse of 'glue'. Succeeds only if cut time is greater than zero and less than 'lifetime'.
 cutDevice :: Time -> Device z -> Maybe (Device z, Device z)
@@ -157,15 +184,8 @@ cutDevice t dev = case innerCut t dev of
   _          -> Nothing
 
 innerCut :: Time -> Device z -> Cutting z
-innerCut t (DGlue b1 b2) = case innerCut t b1 of
-  OffLeft -> OffLeft
-  Cutted l r -> Cutted (DGlue l r) b2
-  OffRight -> case let delta = lifetime b1 in innerCut (t - delta) b2 of
-    OffLeft -> Cutted b1 b2
-    Cutted l r -> Cutted b1 (DGlue l r)
-    OffRight -> OffRight
-innerCut t (DGuts d)
-  | t > 0 && t < gutsSize d = let (l,r) = cutGuts t d in Cutted (DGuts l) (DGuts r)
+innerCut t d
+  | t > 0 && t < gutsSize d = let (l,r) = cutGuts t d in Cutted l r
   | t <= 0 = OffLeft
   | t >= gutsSize d = OffRight
 
@@ -178,11 +198,6 @@ cutGuts t (Guts old _ mail delta dna boxes debug) =
 
 data Cutting z = OffLeft | OffRight | Cutted (Device z) (Device z)
 
--- | Sequence two devices in time to get a longer-lasting device. Can be undone with 'cut'.
-glueDevice :: Device z -> Device z -> Device z
-glueDevice = DGlue
-
-
 -- |Add a cached state to this device. It can be used as memory or an integrator.
 --
 -- The generator function takes the state value as of the beginning of the 'Device' lifetime
@@ -194,8 +209,7 @@ glueDevice = DGlue
 --
 -- New bones are carried into the future via 'next' then evaluated to WHNF, becoming old in the process.
 -- They can be used to speed up behaviors that depend on accumulated history.
-newCache :: Splice g
-         => (Time -> s -> f a -> (g b,s)) -- ^How to compute output window from input window, state, and new window length
+newCache :: (Time -> s -> f a -> (g b,s)) -- ^How to compute output window from input window, state, and new window length
          -> s -- ^Initial seed state.
          -> View z f a -- ^Input window
          -> Plan z (View z g b)
@@ -207,7 +221,7 @@ newCache f base inputView = do
   return (look viewer)
 
 dummyDevice :: MeatBoneCache -> MailPile -> Device z
-dummyDevice cache pile = DGuts (Guts bomb cache pile bomb bomb bomb bomb) where
+dummyDevice cache pile = Guts bomb cache pile bomb bomb bomb bomb where
   bomb = error "(bug) some of the dummy device fields were used after all?"
 
 {-
@@ -232,13 +246,13 @@ newCacheDebug l f base (View input) = do
 --
 -- By default, on device creation or 'next', the box is empty. After this the box
 -- value may be arbitrarily edited using the 'Editor'.
-newInputbox :: Splice f
-           => f m -- ^ Used as the initial, empty, default, no signal value.
-           -> Plan z (View z f m, Editor z f m)
+newInputbox :: Burn (f a)
+            => f a -- ^ Used as the initial, empty, default, no signal value.
+            -> Plan z (View z f a, Editor z f a)
 newInputbox iv = do
   g <- gets psGen2
   let (k, g') = Mail.genKey g
-  let box = Mail.box "unnamed" (const "?") wshift iv k
+  let box = Mail.box "unnamed" (const "?") burn iv k
   let someBox = Mail.some box
   modify (\ps -> ps { psGen2 = g', psMailboxes = psMailboxes ps ++ [someBox] })
   let sig = Viewer (\cache pile -> Mail.getMail k iv pile)
@@ -281,7 +295,7 @@ runPlan initialDelta plan =
       initialCache = skeleton bones
       template = V.fromList regens
       debugV = V.fromList debug
-  in finalize (DGuts $ guts initialCache noMail initialDelta template boxes debugV)
+  in finalize (guts initialCache noMail initialDelta template boxes debugV)
 
 data PlanState z = PlanState
   { psGen1   :: KeyGen BaseKey
@@ -298,7 +312,6 @@ data CacheDebug :: (*,*) -> * where
 type Regen = Time -> MeatBoneCache -> MeatBoneCache -> MailPile -> Wrap2
 type DNA = V.Vector Regen
 
-
 ex :: IO ()
 ex = runPlan 1 $ do
 --  (spy1 :: View z Q (), box1) <- newMailboxDebug "box1"
@@ -306,7 +319,7 @@ ex = runPlan 1 $ do
   out1 <- newCache (\l c y -> (y <> y, succ c)) 'c' (const (pure [5])) :: Plan z (View z TF [Double])
 --  out2 <- newCacheDebug "var1" (\l c y -> (y <> y <> y, succ c)) 'c' (pure []) :: Plan z (View z TF [Double])
   return $ \d -> do
-    putStrLn (debug (d `glue` d))
+    putStrLn (debug d ++ debug d)
 
 debugFormatStr = "%10s %10s %20s %15s %15s"
 debugFormat :: String -> String -> String -> String -> String -> String
@@ -341,11 +354,7 @@ debugCache (Some (CacheDebug l shMeat shBones)) (Wrap2 _ oldBone, Wrap2 meat new
 -- | Show internal data on a device. By default most values are unreadable.
 -- But see 'newCacheDebug' and 'newMailboxDebug'.
 debug :: Device z -> String
-debug dev = unlines (innerDebug dev [])
-
-innerDebug :: Device z -> [String] -> [String]
-innerDebug (DGuts d) = (debugGuts d ++)
-innerDebug (DGlue b1 b2) = innerDebug b1 . innerDebug b2 
+debug dev = unlines (debugGuts dev)
 
 -- move forward in time, preserving mail by splitting and forgetting
 shiftKeepMail :: Time -> Guts z -> Guts z
@@ -370,15 +379,8 @@ editGutsMail k (Guts old _ mail delta dna forgetter debugger) x =
   in guts old mail' delta dna forgetter debugger
 -}
 
-deliver :: Splice f => Mailbox (f m) -> (f m -> f m) -> Device z -> Device z
-deliver box f (DGuts someGuts) = DGuts (deliverGuts box f someGuts)
-deliver box f (DGlue b1 b2) = 
-  let c1 = deliver box f b1
-      c2 = deliver box (shiftEdit (lifetime b1) f) b2
-  in DGlue c1 c2
-
-shiftEdit :: Splice f => Time -> (f m -> f m) -> f m -> f m
-shiftEdit dt f = wshift (negate dt) . f . wshift dt
+deliver :: Mailbox (f m) -> (f m -> f m) -> Device z -> Device z
+deliver box f someGuts = deliverGuts box f someGuts
 
 data KeyGen ph = KeyGen Int
 genKey :: KeyGen ph -> a -> (Key ph a, Wrap, KeyGen ph)
@@ -469,44 +471,44 @@ forgetMeat (Cache2 v) = Cache2 (V.map f v) where
 
 
 
-instance Film (Device z) where
+instance Film (Guts z) where
   next     = nextDevice
   lifetime = deviceSize
-
-instance Editable (Device z) where
-  glue = glueDevice
   cut  = cutDevice
+
+--instance Editable (Device z) where
+--  glue = glueDevice
 
 data Tree a = Leaf a | Fork a (Tree a) (Tree a)
 
 -- | One way to compose different 'Device's is to choose 1 input and 1 output of each and pipe them.
 data Sandwich :: Tree * -> * -> * -> * where
-  Item :: (Splice f, Splice g) => Editor z f i -> View z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
-  Pile :: Splice h => Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
+  Item :: Editor z f i -> View z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
+  Pile :: Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
 
 -- | Lift a 'Device' along with 1 input and 1 output into a singleton 'Sandwich'
-item :: (Splice f, Splice g) => Editor z f i -> View z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
+item :: Editor z f i -> View z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
 item = Item
 
 -- | Compose two 'Device' 'Sandwich'es such that the output of one is piped as the input to the other.
-(<<<) :: Splice h => Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
-s2 <<< s1 = Pile (writeSandwich (const (readSandwich s1)) s2) s1
+--(<<<) :: Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
+--s2 <<< s1 = Pile (writeSandwich (const (readSandwich s1)) s2) s1
 
 instance Film (Sandwich zs a b) where
   lifetime (Item _ _ d) = lifetime d
   lifetime (Pile x y) = max (lifetime x) (lifetime y) -- but they should be equal
   next t (Item box spy d) = Item box spy (next t d)
   next t (Pile x y) = Pile (next t x) (next t y)
-
-instance Editable (Sandwich zs a b) where
   cut t (Item box spy d) = fmap (\(d1,d2) -> (Item box spy d1, Item box spy d2)) (cut t d)
   cut t (Pile x y) = case cut t x of
     Just (x1,x2) -> case cut t y of
       Just (y1,y2) -> Just (Pile x1 y1, Pile x2 y2)
       Nothing -> error "composed objects have different lengths"
     Nothing -> Nothing
-  glue (Item box spy d1) (Item _ _ d2) = Item box spy (glue d1 d2)
-  glue (Pile x1 y1) (Pile x2 y2) = Pile (glue x1 x2) (glue y1 y2)
+
+--instance Editable (Sandwich zs a b) where
+--  glue (Item box spy d1) (Item _ _ d2) = Item box spy (glue d1 d2)
+--  glue (Pile x1 y1) (Pile x2 y2) = Pile (glue x1 x2) (glue y1 y2)
 
 -- | View the output from the last device in the chain.
 readSandwich :: Sandwich zs a (g o) -> g o
@@ -523,19 +525,19 @@ writeSandwich f (Pile s2 s1) =
   in Pile s2' s1'
 
 -- single out a device input and output for pipe purposes
-data DevicePipe :: * -> * -> * where
-  DP :: (Splice f, Splice g) => Editor z f i -> View z g o -> Device z -> DevicePipe (f i) (g o)
+data SD :: * -> * -> * where
+  SD :: Editor z f i -> View z g o -> Device z -> SD (f i) (g o)
 
 
-{- your device with hidden state and bundled environment that can be arbitrarily modified
--- is a form of Store comonad.
-
-look :: WrappedDevice a b -> b
-edit :: (a -> a) -> WrappedDevice a b -> WrappedDevice a b
-
--- should the stuff be stored bundled after all?
--- if we move it out, then the remaining bits become a category, even encapsulable as a function
+{-
+instance Film (DevicePipe a b) where
+  next l (DP edit look d) = DP edit look (next l d)
+  lifetime (DP _ _ d) = lifetime d
+  cut p (DP edit look d) = case cut p d of
+    Just (d1,d2) -> Just (DP edit look d1, DP edit look d2)
+    Nothing -> Nothing
 -}
+
 
 
 {- the glue operation that requires so much extra type level fu can be eliminated by having
@@ -552,15 +554,143 @@ edit :: (a -> a) -> WrappedDevice a b -> WrappedDevice a b
 -}
 
 
-data HabList a
-  = Hab a
-  | a :| HabList a
-      deriving (Eq,Ord,Show,Read,Functor,Foldable)
 
-instance Semigroup (HabList a) where
-  Hab x <> more     = x :| more
-  (x :| xs) <> more = x :| (xs <> more)
+-- complete the rectangle of length l > 0
+-- l = l2 + l1 => ext f l = ext f l2 . ext f l1
+newtype F s a b = F { ext :: Time -> a -> s -> (b,s) } -- Category, Arrow, Profunctor, ...
 
-type GluedDevice z = HabList (Device z)
+deriving instance Functor (F s a)
 
-instance Film (GluedDevice z)
+instance Category (F s) where
+  id = F (\_ a s -> (a,s))
+  F gen2 . F gen1 = F (\l a s -> let (b,s') = gen1 l a s in gen2 l b s')
+
+instance Semigroup s => Arrow (F s) where
+  arr f = F (\l a s -> (f a,s))
+  F gen1 *** F gen2 = F gen3 where
+    gen3 l (a1,a2) s = ((b1,b2), s1' <> s2') where
+      (b1, s1') = gen1 l a1 s
+      (b2, s2') = gen2 l a2 s
+
+instance Profunctor (F s) where
+  rmap = fmap
+  lmap g (F gen) = F (\l z s -> gen l (g z) s)
+
+instance (Semigroup s, Semigroup b) => Semigroup (F s a b) where
+  F gen1 <> F gen2 = F gen3 where
+    gen3 l a s = (b1 <> b2, s1 <> s2) where
+      (b1,s1) = gen1 l a s
+      (b2,s2) = gen2 l a s
+
+data Lens s u = Lens (s -> u) ((u -> u) -> s -> s)
+
+instance Category Lens where
+  id = Lens id id
+  Lens g ong . Lens f onf = Lens (g . f) (onf . ong)
+
+-- | Use a component of a larger state. Embed an F u a b in a larger state.
+component :: Lens parent child -> F child a b -> F parent a b
+component (Lens bor rpl) (F gen) = F gen' where
+  gen' l a s = (b, rpl (const u') s) where (b, u') = gen l a (bor s)
+
+data Guest a b = forall s . Guest s (F s a b)
+deriving instance Functor (Guest a)
+
+instance Profunctor Guest where
+  rmap = fmap
+  lmap g (Guest s bigF) = Guest s (lmap g bigF)
+
+host :: (Burn a, Glue b) => F (Guest a b) (a, Q (Guest a b)) b
+host = F gen where
+  gen l (input, Q reloads) (Guest s (F guest)) = case reloads of
+    [] ->
+      let (b,s') = guest l input s
+      in (b, Guest s' (F guest))
+    ((t, Guest newS (F newGuest)):more) ->
+      let (b,_) = guest t input s
+          (b',finalGuest) = gen (l - t) (burn t input, Q more) (Guest newS (F newGuest))
+          finalB = glue t b b'
+      in (finalB, finalGuest)
+
+
+
+
+-- an F s a b packaged with a length, an s, and an a. s hidden
+data Snip a b = forall s . Snip Time a s (F s a b)
+
+deriving instance Functor (Snip r)
+
+instance Comonad (Snip r) where
+  extract (Snip l a s (F f)) = let (y,_) = f l a s in y
+  extend f (Snip l a s (F g)) = Snip l a s (F g') where
+    g' l' a' s' = (c, s') where
+      c = f (Snip l' a' s' (F g))
+
+cutSnip :: Burn r => Time -> Snip r a -> (Snip r a, Snip r a)
+cutSnip t (Snip len a s (F gen)) = (l, r) where
+  l = Snip t a s (F gen)
+  r = Snip (len - t) (burn t a) s' (F gen) where (_,s') = gen t a s
+
+growSnip :: Monoid r => Time -> Snip r a -> Snip r a
+growSnip l sn@(Snip _ a s bigF) = Snip l mempty s' bigF where (_,s') = ext bigF l a s
+
+lenSnip :: Snip r a -> Time
+lenSnip (Snip l _ _ _) = l
+
+-- | Shift data backward in time and discard if it makes sense. A.k.a. trimming.
+class Burn a where
+  burn :: Time -> a -> a
+
+-- | Assuming first dataset extends out to some time, shift a second data set that far and merge.
+-- 'burn' undoes glue. But burn can't be reversed.
+class Glue a where
+  glue :: Time -> a -> a -> a
+
+
+
+type KB = ()
+type ModKey = ()
+data Ctrl = Ctrl
+  { ctrlKeydown  :: [(KB,[ModKey])]
+  , ctrlKeyup    :: [(KB,[ModKey])]
+  , ctrlKeyagain :: [(KB,[ModKey])]
+  , ctrlTyping   :: [Char]
+  , ctrlMouse    :: [(Float,Float)]
+  , ctrlClick    :: [Int]
+  , ctrlUnclick  :: [Int]
+  , ctrlScroll   :: [(Float,Float)]
+  }
+
+data MasterIn = MasterIn (TF Time) (Q Ctrl)
+
+instance Burn MasterIn where
+  burn l (MasterIn t ctrl) = MasterIn (burn l t) (burn l ctrl)
+
+instance Burn (TF a) 
+instance Burn (Q a) 
+instance Burn (Punctuated e a) 
+instance Glue (TF a) 
+instance Glue (Q a) 
+instance Glue (Punctuated e a) 
+
+
+type Picture = Bool
+
+--ex :: F Database MasterIn (TF Picture)
+
+-- Arrow should be Cartesian Category
+-- ArrowChoice should be Cocartesian Category
+-- ArrowApply should be Closed Cartesian Category
+
+
+
+{-
+instance (Monoid (f a), Shift f) => Film (Snip (f a) b) where
+  lifetime (Snip l _ _) = l
+  next l' sn@(Snip _ _ gen) = Snip l' (mempty, s') gen where
+    (_, s') = extract sn
+  cut t (Snip l (a,s) (F gen)) = Just (l, r) where
+    l = Snip t (a,s) (F gen)
+    r = Snip (l - t) (wshift (-t) a, s') where (_,s') = gen t (a,s)
+-}
+

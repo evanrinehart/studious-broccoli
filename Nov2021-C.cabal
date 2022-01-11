@@ -21,12 +21,12 @@ executable Nov2021-C
   other-modules:       Glue, Ticks, CmdLine, Arkanoid, Grid, Geometry,
                        Common, Event, Rainbow, Level, Slider, Widget,
                        Paint, HList, Performance, Device, Film, SimpleDevice,
-                       TextCtrl, Audio, CardGame, Mailboxes
+                       TextCtrl, Audio, CardGame, Mailboxes, Driver
   -- other-extensions:
   build-depends:       base < 5, GLFW-b, gl, vector, JuicyPixels, containers,
                        random, clock, mtl, comonad, vector, text, sdl2, stm,
                        libvorbis, bytestring, directory, QuickCheck, reflection,
-                       some
+                       some, time, profunctors
   -- hs-source-dirs:
   default-language:    Haskell2010
   ghc-options:         -O2 -Wall -rtsopts -threaded

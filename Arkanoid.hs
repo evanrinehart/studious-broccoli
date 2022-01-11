@@ -42,6 +42,42 @@ import Level
 import Event
 import Rainbow
 
+import Device
+import Film
+
+import Data.Profunctor
+
+exf :: ArkParams -> F Ark (Punctuated () Float2) (TF Ark, Q [At Plat])
+exf ap = F (\l mouse ark -> ((pure ark, mempty), ark))
+-- this will be a combination of the animation algorithm and the mouse event handler
+-- if the mouse moved *now* then start with the mouse.
+-- else run the animation until the first mouse event or l, whichever is first.
+-- repeat until l is reached. Mouse events at exactly l shouldn't happen.
+
+--hcompose :: F s1 b c -> F s2 a b -> F (s1,s2) a c
+
+type MasterIn = ()
+type Ctrl = ()
+globalMouseShift :: Float4 -> Float2 -> Float2
+globalMouseShift _ x = x
+onMouse :: (Float2 -> Float2) -> Ctrl -> Ctrl
+onMouse f () = ()
+onCtrl :: (Ctrl -> Ctrl) -> MasterIn -> MasterIn
+onCtrl f () = ()
+globalMouseShift4 :: Profunctor f => Float4 -> f MasterIn b -> f MasterIn b
+globalMouseShift4 = lmap . (onCtrl . onMouse . globalMouseShift)
+
+--pairShare :: (s -> s -> s) -> (b1 -> b2 -> b3) -> F s a b1 -> F s a b2 -> F s a b3
+
+{-
+the input can be keyed collection of events, components can 
+newtype MailKey a = MailKey Int
+newtype Mailbox = Mailbox (IntMap (Some Q))
+mailLookup :: MailKey a -> Mailbox -> Q a
+lmap . mailLookup :: MailKey a -> F s Mailbox b -> F s (Q a) b
+-}
+
+
 
 data Ark = Ark
   { arkLevel :: AbstractLevel
@@ -596,5 +632,5 @@ sweep el ev dt (P x v) = fmap f (intersectElement x (-ev) el) where
         x' = x + ev .* dt''
         n = normalToElementAt el hitX
         v' = reflect n v
-        extra = 1
+        extra = 1 :: Int
     in (dt', P x' v')

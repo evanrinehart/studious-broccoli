@@ -5,7 +5,6 @@ module Film (
   -- * Classes
 
   Film(..),
-  Editable(..),
   Sampler(..),
   TimeFoldable(..),
   Shift(..),
@@ -23,6 +22,9 @@ module Film (
 ) where
 
 import Control.Applicative
+import Data.Foldable
+import qualified Data.List.NonEmpty as NE
+import Data.List.NonEmpty (NonEmpty(..))
 
 
 type Time = Double
@@ -45,16 +47,6 @@ class Film a where
 
   -- | Cut at interior time point, I.e. when @0 < t < lifetime x@, to get two pieces.
   cut    :: Time -> a -> Maybe (a,a)
-
--- | Ability to arbitrarily sequence or resequence a piece of film
---
--- prop> cut (lifetime x) (glue x y) = Just (x,y)
--- prop> glue l r = x where Just (l,r) = cut t x
--- prop> lifetime (glue x y) = lifetime x + lifetime y
--- prop> lifetime x = lifetime l + lifetime r where Just (l,r) = cut t x
-class Film a => Editable a where
-  -- | @glue x y@ is @x@ followed by @y@. Undoes a 'cut'.
-  glue   :: a -> a -> a
 
 -- | Simply a function of 'Time'.
 newtype TF a = TF (Time -> a) deriving Functor
@@ -178,6 +170,13 @@ punctuations ps = Q (go ps) where
   go (A _) = []
   go (AB x t e more) = (t,e) : go more
 
+timeElems :: Punctuated e a -> NonEmpty (Time,a)
+timeElems segs = goStart segs where
+  goStart (A x) = (0,x) :| []
+  goStart (AB x p _ more) = (0,x) :| go p more
+  go t (A x) = [(t,x)]
+  go t (AB x p _ more) = (t,x) : go p more
+
 instance Shift (Punctuated e) where
   wshift delta (A x) = A x
   wshift delta (AB x t y more) = AB x (t + delta) y (wshift delta more)
@@ -207,4 +206,13 @@ instance Semigroup e => Applicative (Punctuated e) where
     LT -> AB (f x) t1 b1 (more1 <*> AB x t2 b2 more2)
     EQ -> AB (f x) t1 (b1 <> b2) (more1 <*> more2)
     GT -> AB (f x) t2 b2 (AB f t1 b1 more1 <*> more2)
+
+timeCells :: Film a => NonEmpty a -> NonEmpty (Time,a)
+timeCells (x0 :| more) = (0,x0) :| go (lifetime x0) more where
+  go t (x:more) = (t,x) : go (t + lifetime x) more
+  go t [] = []
+
+movieLength :: Film a => [a] -> Time
+movieLength = sum . map lifetime
+
 
