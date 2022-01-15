@@ -1,19 +1,12 @@
 {-# LANGUAGE GADTSyntax #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE BangPatterns #-}
 module Driver (
-
-  -- | Driver thread for a thing that is
-  --
-  --    * pollable at any time
-  --    * editable at any time
-  --    * autonomously performing actions at times
-  --
-
-  enterRealTimeLoop,
-  enterStasisLoop,
+  enterObjectLoop,
+  enterLivingLoop,
   DriverRequest(..),
-  DriveeAPI(..),
+  LifeFunctions(..),
   WallTime(..),
   newClock
 ) where
@@ -32,28 +25,27 @@ import Film
 -- 'delta' (demand/request) something wants to query the subject *now*
 -- 'rho' (read-only) this is like delta but not intended to cause any effect
 
-data DriveeAPI a = DriveeAPI
-  { getFilmLength     :: a -> Time
+data LifeFunctions a = LifeFunctions
+  { getLifeLength     :: a -> Time
   , getActionChain    :: a -> [(Time, IO ())] -- ^ hypothetical spontaneous action schedule
   , getQuitFlag       :: a -> Bool -- ^ if true driver ends the loop and returns
   , performCut        :: Time -> a -> (a,a) -- ^ cut point must be within interior of the @a@
-  , growMoreFilm      :: Time -> a -> a
+  , growMoreLife      :: Time -> a -> a
   , convertTime1      :: WallTime -> Time -- ^ amount of real time to virtual time
   , convertTime2      :: Time -> Int -- ^ virtual time length to real microseconds
-  , minChunkSize      :: Time -- ^ minimum size of new chunks of film
+  , minChunkSize      :: Time -- ^ minimum size of new chunks of life
   }
 
 -- | The driver lives in a server. External agents can issue requests to it.
--- Type @a@ is the object type.
 data DriverRequest :: * -> * where
   -- | View the object now. Receive answer in the given MVar. Has no side effect on @a@.
-  Get  :: MVar r -> (a -> r) -> DriverRequest a
+  Get  :: MVar a -> (obj -> a) -> DriverRequest obj
   -- | Edit the object now. Expects no response.
-  Put  :: (a -> a) -> DriverRequest a
+  Put  :: (obj -> obj) -> DriverRequest obj
   -- | Like 'Get' but also make changes in the process.
-  Loot :: MVar r -> (a -> (r, a)) -> DriverRequest a
+  Loot :: MVar a -> (obj -> (a, obj)) -> DriverRequest obj
   -- | Used by watchdog to wake up for scheduled events.
-  Wake :: DriverRequest a 
+  Wake :: DriverRequest obj
 
 -- | Value corresponding to real time. 1 = 1 second or 1 second since an arbitrary time.
 newtype WallTime = WallTime Double deriving (Eq,Ord,Read,Show)
@@ -92,13 +84,13 @@ data ServerDebug = SD
       deriving Show
 
 -- | Begin running a simulation in time and responding to external requests.
-enterRealTimeLoop
-  :: Show a => IO WallTime -- ^real time source — should return monotonic time
-  -> DriveeAPI a -- ^what the driver uses to work
-  -> MVar (DriverRequest a) -- ^put requests here from another thread to interact with simulation
-  -> a -- ^the initial state
+enterLivingLoop
+  :: Show obj => IO WallTime -- ^real time source — should return monotonic time
+  -> LifeFunctions obj -- ^what the driver uses to work
+  -> MVar (DriverRequest obj) -- ^put requests here from another thread to interact with simulation
+  -> obj -- ^the initial state
   -> IO () -- ^loop ends when drivee signals the quit flag
-enterRealTimeLoop wallClock api inbox start = boot where
+enterLivingLoop wallClock api inbox start = boot where
   boot = do
     let chain = getActionChain api start
     now <- wallClock
@@ -107,23 +99,23 @@ enterRealTimeLoop wallClock api inbox start = boot where
     if getQuitFlag api oldObj
       then return ()
       else do
-        let targetTime = minimum (getFilmLength api oldObj : map fst (take 1 oldChain))
+        let targetTime = minimum (getLifeLength api oldObj : map fst (take 1 oldChain))
 
         print ("take or sleep until", targetTime)
         req <- takeMVarWatchdog inbox (convertTime2 api targetTime) Wake
 
         now <- wallClock
         let cutTime = convertTime1 api (now `diffWallTime` baseTime)
-        let endTime = getFilmLength api oldObj
+        let endTime = getLifeLength api oldObj
         -- if cutTime is too ridiculously small, esp zero, we may have problems
 
         when (cutTime < 0.001) $ do
           putStrLn ("loop reoccurred very soon: " ++ show (now, baseTime, now `diffWallTime` baseTime, cutTime))
 
-        print (SD baseTime now (getFilmLength api oldObj) 
+        print (SD baseTime now (getLifeLength api oldObj) 
           cutTime (getQuitFlag api oldObj) (map (\(x,_) -> (x,())) oldChain) (show oldObj) n)
         -- case 1, t is before lifetime is up, go to next step.
-        -- case 2, ran out of film. Finish remaining sigmas, grow, shift, discard, ready for next step.
+        -- case 2, ran out of life. Finish remaining sigmas, grow, shift, discard, ready for next step.
         (oldObj',t,oldChain',n') <- if cutTime < endTime
           then do
             return (oldObj, cutTime, oldChain, n)
@@ -133,7 +125,7 @@ enterRealTimeLoop wallClock api inbox start = boot where
             let newCutTime = cutTime - endTime
             let numChunks = ceiling (newCutTime / chunkSize) :: Int -- hmm
             putStrLn ("GROW " ++ show numChunks)
-            let newObj = growMoreFilm api (fromIntegral numChunks * chunkSize) oldObj
+            let newObj = growMoreLife api (fromIntegral numChunks * chunkSize) oldObj
             let newChain = getActionChain api newObj
             return (newObj, newCutTime, newChain, n + numChunks)
 
@@ -169,11 +161,11 @@ enterRealTimeLoop wallClock api inbox start = boot where
         loop now sigmas'' obj' n'
 
 -- | A server loop which ignores real time. The served object is static until acted on.
-enterStasisLoop
-  :: MVar (DriverRequest a) -- ^put requests here from another thread to interact with the object
-  -> a -- ^the initial state
-  -> IO b -- ^loop never ends 
-enterStasisLoop inbox obj = do
+enterObjectLoop
+  :: MVar (DriverRequest obj) -- ^put requests here from another thread to interact with the object
+  -> obj -- ^the initial state
+  -> IO a -- ^loop never ends 
+enterObjectLoop inbox obj = do
   req <- takeMVar inbox
 
   obj' <- case req of
@@ -192,7 +184,7 @@ enterStasisLoop inbox obj = do
     _ -> do
       return obj
 
-  enterStasisLoop inbox obj'
+  enterObjectLoop inbox obj'
 
 type ActionChain = [(Time, IO ())]
 
@@ -235,13 +227,13 @@ boxQuit (Box l) = l < 0
 boxCut t (Box l) = (Box t, Box (l - t))
 boxGrow l2 (Box l1) = Box l2
 
-ex :: DriveeAPI Box
-ex = DriveeAPI
-  { getFilmLength = boxLen
+ex :: LifeFunctions Box
+ex = LifeFunctions
+  { getLifeLength = boxLen
   , getActionChain = boxChain
   , getQuitFlag  = boxQuit
   , performCut   = boxCut
-  , growMoreFilm = boxGrow
+  , growMoreLife = boxGrow
 --  , convertTime1 = \(WallTime t) -> t -- wall to virtual time conversion
   , convertTime1 = \(WallTime t) -> t * 60 -- 60 'virtual time' per second
   , convertTime2 = \t -> ceiling (t * 16666.666)
@@ -255,7 +247,7 @@ test = do
   var <- newEmptyMVar
   sideVar <- newEmptyMVar
 
-  forkIO $ do
+  _ <- forkIO $ do
     threadDelay 1434567
     putMVar var (Get sideVar (\(Box l) -> l))
     l <- takeMVar sideVar
@@ -266,4 +258,47 @@ test = do
     putMVar var (Put (\(Box _) -> Box (-1)))
 
     return ()
-  enterRealTimeLoop clock ex var (Box (minChunkSize ex))
+  enterLivingLoop clock ex var (Box (minChunkSize ex))
+
+{-
+data NonFlat a = Exactly !a | Over !a (NonFlat a)
+  deriving Show
+
+type Time' = NonFlat Time
+
+mergeStreams :: Semigroup a => [(Time',a)] -> [(Time',a)] -> [(Time',a)]
+mergeStreams xs [] = xs
+mergeStreams [] ys = ys
+mergeStreams ((t1,x):xs) ((t2,y):ys) = case compare t1 t2 of
+  LT -> (exact t1,x) : mergeStreams xs ((improve t1 t2, y):ys)
+  EQ -> (t1,x <> y) : mergeStreams xs ys
+  GT -> (exact t2,y) : mergeStreams ((improve t2 t1,x):xs) ys
+
+-- attempt to get the exact value, might be expensive, or even undefined
+exact :: NonFlat a -> NonFlat a
+exact (Exactly t)   = Exactly t
+exact (Over _ more) = exact more
+
+-- attempt to get the exact value, might be expensive, or even undefined
+flat :: NonFlat a -> a
+flat (Exactly t)   = t
+flat (Over _ more) = flat more
+
+-- partially improve a NonFlat
+improve :: Ord a => a -> NonFlat a -> NonFlat a
+improve limit (Exactly t) = Exactly t
+improve limit (Over p more) = if limit <= p then seekNonFlat limit more else Over p more
+
+instance Ord a => Ord (NonFlat a) where
+  Exactly t1 < Exactly t2 = t1 < t2
+  Exactly t1 < Over t2 more = if t1 <= t2 then True else Exactly t1 < more
+  Over t1 more < Exactly t2 = if t2 <= t1 then False else more < Exactly t2
+  Over t1 more1 < Over t2 more2 = more1 < more2
+
+type E a = [(Time,a)]
+type F s a b = Time -> a -> s -> (b,s)
+-}
+
+-- in this type, sampling at t=0 always gives the current value
+-- to move ahead you must "burn" some amount
+-- The time field is size of this segment (or infinite)

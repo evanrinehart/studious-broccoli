@@ -2,51 +2,56 @@
 {-# LANGUAGE DeriveFoldable #-}
 module Film (
 
-  -- * Classes
-
-  Film(..),
-  Sampler(..),
-  TimeFoldable(..),
-  Shift(..),
-
   -- * Time Data
+
+  -- | There are many possible containers for time data. These are examples.
 
   TF(..),
   Q(..),
   Punctuated(..),
   punctuations,
+  unpunctuated,
+  populate,
+  remember,
+  timeElems,
+
+  Rail(..),
+  Bead(..),
+  pureRail,
+  railNext,
+  railEvents,
+
+  -- * Classes
+
+  Burn(..),
+  Glue(..),
+  Sampler(..),
+  TimeFoldable(..),
+  Life(..),
+
+  -- * Scanning, sampling, filtering
+
+  scanQ,
+  scanQMaybe,
+  sample,
+  onlyJust,
+  
 
   -- * Misc
+
 
   Time
 ) where
 
 import Control.Applicative
 import Data.Foldable
+import Data.Maybe
 import qualified Data.List.NonEmpty as NE
 import Data.List.NonEmpty (NonEmpty(..))
+import Control.Monad (join)
 
+import TimeData (Time)
 
-type Time = Double
-
--- | Shifting time data. Used to implement @cut@.
-class Shift f where
-  -- | Move all data by some amount of time
-  wshift  :: Time -> f a -> f a
-
--- | Finite-duration, generative data
---
--- prop> lifetime (next l x) = l
--- prop> l1 < l2 => next l1 x <: next l2 x
-class Film a where
-  -- | generate next window of the requested length
-  next     :: Time -> a -> a
-
-  -- | the length or lifetime of @a@
-  lifetime :: a -> Time
-
-  -- | Cut at interior time point, I.e. when @0 < t < lifetime x@, to get two pieces.
-  cut    :: Time -> a -> Maybe (a,a)
 
 -- | Simply a function of 'Time'.
 newtype TF a = TF (Time -> a) deriving Functor
@@ -66,10 +71,16 @@ instance Semigroup a => Semigroup (TF a) where
 instance Monoid a => Monoid (TF a) where
   mempty = TF (const mempty)
 
+instance Monad TF where
+  TF f >>= h = TF (\t -> let TF g = h (f t) in g t)
+
+
+{-
 instance Shift TF where
   wshift delta (TF f) = TF (\t -> f (t - delta))
 --  wsplice p (TF f) (TF g) = TF h where
 --    h t = if t < p then f t else g t
+-}
   
 -- | A discrete sequence of values at increasing times.
 newtype Q a = Q [(Time,a)] deriving (Eq,Ord,Show,Read,Functor,Foldable)
@@ -86,11 +97,68 @@ instance Semigroup a => Semigroup (Q a) where
 instance Semigroup a => Monoid (Q a) where
   mempty = Q []
 
-instance Shift Q where
-  wshift delta (Q as) = Q (map (\(t, a) -> (t + delta, a)) as)
---  wsplice t (Q xs) (Q ys) = ys' `seq` Q (xs' ++ ys') where
---    xs' = takeWhile ((< t) . fst) xs
---    ys' = dropWhile ((< t) . fst) ys
+-- | A time varying value possibly punctuated with events.
+data Rail b a = Rail (Time -> a) Time (Bead b a) deriving Functor
+data Bead b a = Bead b (Rail b a) deriving Functor
+
+-- | This behavior goes on forever and has no continuation.
+pureRail :: (Time -> a) -> Rail b a
+pureRail tf = Rail tf (1/0) railError
+
+railError = error "past the end of infinity"
+
+-- | Attempt to view the next event and continuation.
+railNext :: Rail b a -> Maybe (Time, b, Rail b a)
+railNext (Rail _ t k)
+  | isInfinite t = Nothing
+  | otherwise    = let Bead x r = k in Just (t,x,r)
+
+-- | The time until event. May be plus infinity.
+railLife :: Rail b a -> Time
+railLife (Rail _ t _) = t
+
+
+-- | Drop everything between events.
+railEvents :: Rail b a -> Q b
+railEvents = Q . go where
+  go r = case railNext r of
+    Just (t,x,r') -> (t,x) : go r'
+    Nothing -> []
+
+instance Sampler (Rail b) where
+  Rail f l k `at` t = if t <= l
+    then f t
+    else let Bead _ r = k in r `at` (t - l)
+
+instance Semigroup b => Applicative (Rail b) where
+  pure x = pureRail (const x)
+  Rail ff t1 k1 <*> Rail fx t2 k2 = case compare t1 t2 of
+    LT -> let Bead y r = k1 in Rail (ff <*> fx) t1 (Bead y (r <*> Rail fx t2 k2))
+    GT -> let Bead y r = k2 in Rail (ff <*> fx) t2 (Bead y (Rail ff t1 k1 <*> r))
+    EQ -> Rail (ff <*> fx) t1 bead where
+      bead | isInfinite t1 = railError
+           | otherwise = let Bead y1 r1 = k1 in
+                         let Bead y2 r2 = k2 in
+                         Bead (y1 <> y2) (r1 <*> r2)
+
+instance (Semigroup b, Semigroup a) => Semigroup (Rail b a) where
+  (<>) = liftA2 (<>)
+
+instance (Semigroup b, Monoid a) => Monoid (Rail b a) where
+  mempty = pure mempty
+
+instance Burn (Rail b a) where
+  burn t (Rail x l k)
+    | isInfinite l = Rail x l k
+    | otherwise = let (Bead y r) = k in Rail x (l + t) (Bead y (burn t r))
+
+instance Monoid b => Glue (Rail b a) where
+  glue p r1 r2 = seek r1 where
+    seek (Rail f t k)
+      | isInfinite t = Rail f p (Bead mempty (burn (-p) r2))
+      | t < p  = let Bead y r = k in Rail f t (Bead y (seek r))
+--      | t == p = 
+--      | t > p  = --
 
 -- | A value can be extracted from any time point in range.
 class Sampler f where
@@ -101,7 +169,7 @@ instance Sampler TF where
 
 instance Sampler (Punctuated e) where
   A x `at` t = x
-  AB x p _ more `at` t = if t < p then x else more `at` (t - p)
+  AB x p _ more `at` t = if t <= p then x else more `at` (t - p)
 
 class TimeFoldable f where
   timeFoldl :: (Time -> b -> a -> b) -> b -> f a -> b
@@ -109,6 +177,9 @@ class TimeFoldable f where
 
   timeList :: f a -> [(Time, a)]
   timeList = timeFoldr (\t x rest -> (t,x) : rest) []
+
+  --timeScanl :: (Time -> b -> a -> b) -> b -> f a -> [b]
+  --timeScanl = _
 
   timeCount :: f a -> Int
   timeCount = timeFoldl (\_ n _ -> n + 1) 0
@@ -170,6 +241,20 @@ punctuations ps = Q (go ps) where
   go (A _) = []
   go (AB x t e more) = (t,e) : go more
 
+unpunctuated :: Punctuated e a -> TF a
+unpunctuated ps = TF (\t -> ps `at` t)
+
+-- | Fill in the blanks with a visiting generator function. It is passed the length of time
+-- between event occurrences.
+populate :: (Time -> b -> a -> b) -> b -> Q a -> Punctuated a b
+populate gen base (Q qs) = go 0 base qs where
+  go now b [] = A b
+  go now b ((t,a):more) = let b' = gen (t - now) b a in AB b t a (go t b' more)
+
+-- | Just use the latest value of the event or initial value before that.
+remember :: a -> Q a -> Punctuated a a
+remember = populate (\_ _ x -> x)
+
 timeElems :: Punctuated e a -> NonEmpty (Time,a)
 timeElems segs = goStart segs where
   goStart (A x) = (0,x) :| []
@@ -177,19 +262,67 @@ timeElems segs = goStart segs where
   go t (A x) = [(t,x)]
   go t (AB x p _ more) = (t,x) : go p more
 
-instance Shift (Punctuated e) where
-  wshift delta (A x) = A x
-  wshift delta (AB x t y more) = AB x (t + delta) y (wshift delta more)
-{-
-  wsplice p before after = go before where
-    go (A x) = AB x p mempty after
-    go (AB x t b more) = case compare t p of
-      LT -> AB x t b (go more)
-      EQ -> case after of
-        A y -> AB x p b (A y)
-        AB _ _ b' more' -> AB x p (b <> b') more'
-      GT -> AB x p mempty after
--}
+
+  
+
+-- | Shift data backward in time and discard if it makes sense to. A.k.a. trimming.
+class Burn a where
+  burn :: Time -> a -> a
+
+-- | Assuming first dataset extends out to some time, shift a second data set that far and merge.
+-- 'burn' undoes 'glue'. But you can't undo a 'burn'.
+class Glue a where
+  glue :: Time -> a -> a -> a
+
+instance Burn (Punctuated e a) where
+  burn l start = seek start where
+    seek (A x) = A x
+    seek (AB x t y more)
+      | l <= t    = AB x (t - l) y (shift more)
+      | otherwise = seek more
+    shift (A x) = A x
+    shift (AB x t y more) = AB x (t - l) y (shift more)
+
+instance Burn (TF a) where
+  burn l (TF f) = TF (\t -> f (t + l))
+
+instance Burn (Q a) where
+  burn l (Q start) = Q (seek start) where
+    seek [] = []
+    seek ((t,x):more)
+      | l <= t    = (t - l, x) : shift more
+      | otherwise = seek more
+    shift [] = []
+    shift ((t,x):more) = (t - l, x) : shift more
+
+
+instance (Burn a, Burn b) => Burn (a,b) where
+  burn t (x,y) = (burn t x, burn t y)
+
+instance Glue (TF a) where
+  glue l (TF f) (TF g) = TF (\t -> if t < l then f t else g t)
+
+instance Glue (Q a) where
+  glue l (Q xs) (Q ys) = Q (go xs) where
+    go [] = shift ys
+    go ((t,x) : more) = if t < l then (t,x) : go more else shift ys
+    shift [] = []
+    shift ((t,y) : more) = (t - l, y) : shift more
+
+instance Monoid e => Glue (Punctuated e a) where
+  glue l as bs = go as where
+    go (A x) = AB x l mempty (shift bs)
+    go (AB x t e more) = if t < l
+      then AB x t e (go more)
+      else AB x l e' more' where -- specifically discard "old" e if there is a tie
+        e' = spy more
+        more' = shift more
+    spy (A x) = mempty
+    spy (AB _ t e _) = if t == l then e else mempty
+    shift (A x) = A x
+    shift (AB x t e more) = AB x (t - l) e (shift more)
+
+
 
 instance (Semigroup e, Semigroup a) => Semigroup (Punctuated e a) where
   (<>) = liftA2 (<>)
@@ -207,12 +340,96 @@ instance Semigroup e => Applicative (Punctuated e) where
     EQ -> AB (f x) t1 (b1 <> b2) (more1 <*> more2)
     GT -> AB (f x) t2 b2 (AB f t1 b1 more1 <*> more2)
 
-timeCells :: Film a => NonEmpty a -> NonEmpty (Time,a)
+
+-- | A finite-sized piece of a life form. It can grow or be cut into pieces.
+-- next and cut may interact to always result in the same [a] sequences in some sense.
+-- Since Time is a float not a real or integer, this might be tricky to pull off.
+class Life a where
+  lifetime :: a -> Time
+  next :: Time -> a -> a
+  cut :: Time -> a -> Maybe (a,a)
+
+timeCells :: Life a => NonEmpty a -> NonEmpty (Time,a)
 timeCells (x0 :| more) = (0,x0) :| go (lifetime x0) more where
   go t (x:more) = (t,x) : go (t + lifetime x) more
   go t [] = []
 
-movieLength :: Film a => [a] -> Time
-movieLength = sum . map lifetime
 
 
+
+-- GUI toolkit
+-- * widgets, or "bidirectional" input.
+-- * layout, graphical "reactive" elements take up space
+
+-- a gui input element is not just an input, but an output
+-- the user looks at the element to get a view of some state
+-- so obviously, if that state changes, the element changes.
+-- Also, when the user engages with the element, they are changing
+-- some state in a way that is consistent with behavior 1.
+
+-- a ui element is a lens bundled with a state
+
+
+-- this slider reflects the value of some Float as a picture.
+-- "unrelated", it outputs Float update events. If hooked up right,
+-- the users changes are reflected.
+--sliderUI :: F2 () (Q UserInput) (TF Float) (TF Picture, Q Float)
+
+
+
+
+
+
+-- | Transform a stream of events using a state transfer function.
+scanQ :: (a -> s -> (b, s)) -> s -> Q a -> (Q b, s)
+scanQ visit start (Q qs) = (Q qs', s') where
+  (qs',s') = go qs start
+  go [] s = ([], s)
+  go ((t,x):more) s =
+    let (y,s') = visit x s
+        (more',s'') = go more s'
+    in ((t,y):more', s'')
+
+-- | Same as 'scanQ' but some events may be ignored.
+scanQMaybe :: (a -> s -> (Maybe b, s)) -> s -> Q a -> (Q b, s)
+scanQMaybe visit start (Q qs) = (Q qs', s') where
+  (qs',s') = go qs start
+  go [] s = ([], s)
+  go ((t,x):more) s =
+    let (my,s') = visit x s in
+    let (more',s'') = go more s' in
+    case my of
+      Just y  -> ((t,y):more', s'')
+      Nothing -> (more', s'')
+
+-- | View the signal at the time of the events.
+sample :: Sampler f => (a -> b -> c) -> Q a -> f b -> Q c
+sample f (Q qs) sig = Q (map (\(t,x) -> (t, f x (sig `at` t))) qs)
+
+-- | Filter out Nothing events.
+onlyJust :: Q (Maybe a) -> Q a
+onlyJust (Q qs) = Q (go qs) where
+  go [] = []
+  go ((t,Just x):more) = (t,x) : go more
+  go (_:more) = go more
+
+  
+  
+
+-- | Transform and filter a stream of events with a mealy machine.
+
+{-
+mealyQ :: (s -> a -> (s, Maybe b)) -> s -> Q a -> (Q b, s)
+mealyQ visit start (Q qs) = (Q out, final) where
+  out = unfoldingList unf
+  final = unfoldingEnd unf
+  unf = unfoldingScanMaybe g start qs
+  g (t,x) s = let (s', y) = visit s x in ((t,y), s')
+-}
+
+-- | Transform and filter a stream of events with a State action.
+
+--stateQ :: (a -> State s (Maybe b))  -> s -> Q a -> (Q b, s)
+--stateQ act s (Q qs) = _
+
+-- this thing responds to mouse button down up by emitting an event

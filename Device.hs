@@ -27,22 +27,21 @@ module Device (
   newInputbox,
   runPlan,
 
-  -- * Device Sandwich
-
-  Sandwich,
-  item,
-  (<<<),
-  readSandwich,
-  writeSandwich,
-
   -- * Profunctor Stuff
   F(..),
   Snip(..),
   Guest(..),
   host,
-  Burn(..),
-  Glue(..),
   guestDevice,
+
+  -- * Replacement for Plan
+
+  M(..),
+  M'(..),
+  wrap,
+  feedback,
+  fToM,
+  mToF,
 
   -- * Debugging
 
@@ -69,6 +68,9 @@ import Control.Comonad
 import Control.Category
 import Control.Arrow
 import Data.Profunctor
+import Data.Bifunctor
+import Data.Bifunctor.Tannen
+import Data.Biapplicative
 import Unsafe.Coerce (unsafeCoerce)
 import qualified Data.IntMap as IM
 import Data.Proxy
@@ -471,72 +473,10 @@ forgetMeat (Cache2 v) = Cache2 (V.map f v) where
 
 
 
-instance Film (Guts z) where
+instance Life (Guts z) where
   next     = nextDevice
   lifetime = deviceSize
-  cut  = cutDevice
-
---instance Editable (Device z) where
---  glue = glueDevice
-
-data Tree a = Leaf a | Fork a (Tree a) (Tree a)
-
--- | One way to compose different 'Device's is to choose 1 input and 1 output of each and pipe them.
-data Sandwich :: Tree * -> * -> * -> * where
-  Item :: Editor z f i -> View z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
-  Pile :: Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
-
--- | Lift a 'Device' along with 1 input and 1 output into a singleton 'Sandwich'
-item :: Editor z f i -> View z g o -> Device z -> Sandwich (Leaf z) (f i) (g o)
-item = Item
-
--- | Compose two 'Device' 'Sandwich'es such that the output of one is piped as the input to the other.
---(<<<) :: Sandwich xs (h x) c -> Sandwich ys a (h x) -> Sandwich (Fork (h x) xs ys) a c
---s2 <<< s1 = Pile (writeSandwich (const (readSandwich s1)) s2) s1
-
-instance Film (Sandwich zs a b) where
-  lifetime (Item _ _ d) = lifetime d
-  lifetime (Pile x y) = max (lifetime x) (lifetime y) -- but they should be equal
-  next t (Item box spy d) = Item box spy (next t d)
-  next t (Pile x y) = Pile (next t x) (next t y)
-  cut t (Item box spy d) = fmap (\(d1,d2) -> (Item box spy d1, Item box spy d2)) (cut t d)
-  cut t (Pile x y) = case cut t x of
-    Just (x1,x2) -> case cut t y of
-      Just (y1,y2) -> Just (Pile x1 y1, Pile x2 y2)
-      Nothing -> error "composed objects have different lengths"
-    Nothing -> Nothing
-
---instance Editable (Sandwich zs a b) where
---  glue (Item box spy d1) (Item _ _ d2) = Item box spy (glue d1 d2)
---  glue (Pile x1 y1) (Pile x2 y2) = Pile (glue x1 x2) (glue y1 y2)
-
--- | View the output from the last device in the chain.
-readSandwich :: Sandwich zs a (g o) -> g o
-readSandwich (Item _ view d) = view d
-readSandwich (Pile s1 s2) = readSandwich s1
-
--- | Edit the input of the first device in the chain, updating everything down the line.
-writeSandwich :: (f i -> f i) -> Sandwich zs (f i) b -> Sandwich zs (f i) b
-writeSandwich f (Item box spy d) = Item box spy (edit box d f)
-writeSandwich f (Pile s2 s1) =
-  let s1' = writeSandwich f s1
-      x = readSandwich s1'
-      s2' = writeSandwich (const x) s2
-  in Pile s2' s1'
-
--- single out a device input and output for pipe purposes
-data SD :: * -> * -> * where
-  SD :: Editor z f i -> View z g o -> Device z -> SD (f i) (g o)
-
-
-{-
-instance Film (DevicePipe a b) where
-  next l (DP edit look d) = DP edit look (next l d)
-  lifetime (DP _ _ d) = lifetime d
-  cut p (DP edit look d) = case cut p d of
-    Just (d1,d2) -> Just (DP edit look d1, DP edit look d2)
-    Nothing -> Nothing
--}
+  cut      = cutDevice
 
 
 
@@ -557,10 +497,14 @@ instance Film (DevicePipe a b) where
 
 -- complete the rectangle of length l > 0
 -- l = l2 + l1 => ext f l = ext f l2 . ext f l1
-newtype F s a b = F { ext :: Time -> a -> s -> (b,s) } -- Category, Arrow, Profunctor, ...
+newtype F s a b = F { unF :: Time -> a -> s -> (b,s) } -- Category, Profunctor, ...
 
 deriving instance Functor (F s a)
 
+-- in f . g . h . i = f . (g . (h . i)), i "happens first"
+-- but due to laziness we see the output of f first, which contains thunks.
+-- to observe any effect of the arg, we must chew through all the layers.
+-- effect such as "mouse outside box, do nothing"
 instance Category (F s) where
   id = F (\_ a s -> (a,s))
   F gen2 . F gen1 = F (\l a s -> let (b,s') = gen1 l a s in gen2 l b s')
@@ -593,6 +537,7 @@ component :: Lens parent child -> F child a b -> F parent a b
 component (Lens bor rpl) (F gen) = F gen' where
   gen' l a s = (b, rpl (const u') s) where (b, u') = gen l a (bor s)
 
+-- | Bundle 'F' with a state and hide the type.
 data Guest a b = forall s . Guest s (F s a b)
 deriving instance Functor (Guest a)
 
@@ -600,6 +545,63 @@ instance Profunctor Guest where
   rmap = fmap
   lmap g (Guest s bigF) = Guest s (lmap g bigF)
 
+feedGuest :: Time -> a -> Guest a b -> (b, Guest a b)
+feedGuest l a (Guest s (F gen)) = let (b,s') = gen l a s in (b, Guest s' (F gen))
+
+-- | There is a free 'F' for any 'Guest'
+wrappedGuest :: F (Guest a b) a b
+wrappedGuest = F (\l a (Guest s (F gen)) -> let (b,s') = gen l a s in (b, Guest s' (F gen)))
+
+
+
+-- This section is like a replacement for Plan
+
+-- | Similar to 'F' but the state type can change.
+newtype M a p b q = M { unM :: Time -> a -> p -> (b, q) }
+
+-- | By temporarily rearranging the letters you can 'lmap' and 'rmap'.
+newtype M' p q a b = M' { unM' :: M a p b q }
+
+instance Bifunctor (M a p) where
+  bimap f g (M gen) = M (\l a s -> let (b,s') = gen l a s in (f b, g s'))
+
+instance Biapplicative (M a p) where
+  bipure b u = M (\_ _ _ -> (b,u))
+  M f <<*>> M g = M h where
+    h l a s = (bf bx, uf ux) where
+      (bf, uf) = f l a s
+      (bx, ux) = g l a s
+
+instance Profunctor (M' p q) where
+  lmap f (M' (M gen)) = M' (M (\l a s -> gen l (f a) s ))
+  rmap f (M' (M gen)) = M' (M (\l a s -> let (b,s') = gen l a s in (f b, s')))
+
+instance Functor (M' p q a) where
+  fmap = rmap
+
+fToM :: F s a b -> M a s b s
+fToM (F gen) = M gen
+mToF :: M a s b s -> F s a b
+mToF (M gen) = F gen
+
+-- | Set up a component with a slice of state in preparation for '<<*>>'.
+wrap :: (s -> u) -> F u a b -> M a s b u
+wrap field (F gen) = M (\l a -> gen l a . field)
+
+-- | When all components are gathered and the full state is reassembled,
+-- loop output back to input. This lets components have a more or less limited
+-- view of each other.
+feedback :: M (a,b) s b s -> F s a b
+feedback (M gen) = F (\l a s -> let (b,s') = gen l (a,b) s in (b,s'))
+
+
+-- slowSlider :: F () (Q Mouse, Punctuated Float Float) (Q Float, Punctuated Picture Picture)
+-- fastSlider :: F () (Q Mouse, TF Float) (Q Float, TF Picture)
+
+
+
+-- | Acts like the contained 'Guest' until events arrive carrying a replacement.
+-- Note the replacements can potentially use different state types.
 host :: (Burn a, Glue b) => F (Guest a b) (a, Q (Guest a b)) b
 host = F gen where
   gen l (input, Q reloads) (Guest s (F guest)) = case reloads of
@@ -613,8 +615,6 @@ host = F gen where
       in (finalB, finalGuest)
 
 
-
-
 -- an F s a b packaged with a length, an s, and an a. s hidden
 data Snip a b = forall s . Snip Time a s (F s a b)
 
@@ -626,25 +626,21 @@ instance Comonad (Snip r) where
     g' l' a' s' = (c, s') where
       c = f (Snip l' a' s' (F g))
 
-cutSnip :: Burn r => Time -> Snip r a -> (Snip r a, Snip r a)
-cutSnip t (Snip len a s (F gen)) = (l, r) where
+cutSnip :: Burn r => Time -> Snip r a -> Maybe (Snip r a, Snip r a)
+cutSnip t (Snip len a s (F gen)) = Just (l, r) where
   l = Snip t a s (F gen)
   r = Snip (len - t) (burn t a) s' (F gen) where (_,s') = gen t a s
 
 growSnip :: Monoid r => Time -> Snip r a -> Snip r a
-growSnip l sn@(Snip _ a s bigF) = Snip l mempty s' bigF where (_,s') = ext bigF l a s
+growSnip l sn@(Snip _ a s bigF) = Snip l mempty s' bigF where (_,s') = unF bigF l a s
 
 lenSnip :: Snip r a -> Time
 lenSnip (Snip l _ _ _) = l
 
--- | Shift data backward in time and discard if it makes sense. A.k.a. trimming.
-class Burn a where
-  burn :: Time -> a -> a
-
--- | Assuming first dataset extends out to some time, shift a second data set that far and merge.
--- 'burn' undoes glue. But burn can't be reversed.
-class Glue a where
-  glue :: Time -> a -> a -> a
+instance (Monoid r, Burn r) => Life (Snip r a) where
+  lifetime = lenSnip
+  cut = cutSnip
+  next = growSnip
 
 
 
@@ -666,12 +662,6 @@ data MasterIn = MasterIn (TF Time) (Q Ctrl)
 instance Burn MasterIn where
   burn l (MasterIn t ctrl) = MasterIn (burn l t) (burn l ctrl)
 
-instance Burn (TF a) 
-instance Burn (Q a) 
-instance Burn (Punctuated e a) 
-instance Glue (TF a) 
-instance Glue (Q a) 
-instance Glue (Punctuated e a) 
 
 
 type Picture = Bool
@@ -694,3 +684,213 @@ instance (Monoid (f a), Shift f) => Film (Snip (f a) b) where
     r = Snip (l - t) (wshift (-t) a, s') where (_,s') = gen t (a,s)
 -}
 
+swap (a,b) = (b,a)
+
+button :: F Int (Q Int) (Q ())
+button = F gen where
+  gen _ mouse s = scanQMaybe ((swap .) . flip buttonRule) s mouse
+
+buttonRule :: Int -> Int -> (Int, Maybe ())
+buttonRule 0 0 = (0, Nothing)
+buttonRule 0 1 = (1, Nothing)
+buttonRule 1 0 = (0, Just ())
+buttonRule 1 1 = (1, Nothing)
+buttonRule a _ = (a, Nothing)
+
+apply :: F s a b -> Time -> a -> s -> (b, s)
+apply (F gen) = gen
+
+-- can we prevent any activity unless the mouse is inside a rectangle
+--hoverGuard :: Monoid e => (a -> Mouse) -> Float4 -> F s (Rail e a) b -> F s (Rail e a) b
+--hoverGuard area (F gen) = F (\l (mouse,qs) s -> 
+-- no because if b has continuous output, we can't invent any without running F
+
+-- can we stop all events but pass other signals to the enclosed component if the mouse
+-- is outside the rectangle
+--hoverGuard :: Monoid e => (a -> Mouse) -> Float4 -> F s (Rail e a) b -> F s (Rail e a) b
+
+
+-- can we transparently switch between a sleeping version of a component and one that
+-- reacts to events if the mouse is inside a rectangle
+--hg :: (a -> Bool) -> F s a b -> F s a b -> F s a b
+
+-- the answer was... No and Yes
+-- No - the current driver algorithm reacts to external events by "interrupting" and
+-- recomputing (the same) history with a different end time. This essentially gives you
+-- an intermediate state of the entire world. No combinator can skip over this.
+-- Yes - the current driver can use a pretty big frame size, during which filters will
+-- cause components down the line to compute larger spans with no events. In the limit
+-- of infinite 'chunk' by the driver, an unreactive component is just a function of time.
+-- If external input is delayed until the end of the frame, adding latency, no recomputation.
+
+-- central issue with interrupting, we have to recompute from start of frame (which might
+-- not be that much time) then build an intermediate state of the entire world. We need the
+-- intermediate state because that is how resuming works, it starts from a state.
+-- Recomputation: we have to recompute because the current schedule doesn't contain..
+-- Intermediate state construction: since the input has changed, we have to resume from new...
+
+-- The algorithm works by taking an input and starting state, and computing a lazy future.
+-- the lazy future unfolds through observations and a spontaneous event dispatcher. This
+-- part is "unreactive". I.e. the user has no ability to affect the future. The unreactive
+-- algorithm.
+
+-- (Conal refers to this period of unreactivity, which adds latency, as the "sample rate")
+
+-- The 'object in stasis' algorithm is the opposite. The world is a single value and sits
+-- there until the user does Put or Loot requests on it. Now it's reactive but inanimate.
+-- The object in stasis algorithm.
+
+-- (Note this works well for a typical audio thread, in which case a 1 chunk latency is unavoidable.)
+
+-- To allow the user to affect a simulation in progress, the simplest method is to cancel
+-- the rest of the future, re-run the simulation from the beginning (note there is no new
+-- external input to consider before this point) but to the current moment. This gives you
+-- a new concrete starting state, then you can "resume" from this state using the new input.
+-- It has reacted to 1 external action, but at the cost of recomputing everything and
+-- constructing an entire concrete intermediate state.
+
+-- Recomputing: this seems a bit ridiculous because we basically already did all this work?
+-- to get to this point? Is it true? Or did we compute something else.
+
+-- Fully constructed intermediate state: also ridiculous because it's likely most of this
+-- intermediate state hasn't changed and this at best forms a new hierarchy of records, at
+-- worst components have rebuilt and provided new data with the same value.
+
+-- Implications: If you give up and only use input at "the sample rate" (end of frame),
+-- then to provide reactivity, you have to turn the frame rate up to some value, like 60
+-- per second. So you still have the intermediate states constructed and deepseq'd 60/s.
+-- On the other hand, if you solve the problem, and provide reactivity within the frame
+-- in an efficient way, you can turn the "frame rate" lower, like 1/s, which would greatly
+-- improve performance.
+
+-- ***
+
+-- The interrupting algorithm relies on inspecting the 'action stream' to compute the
+-- next time an event would occur, i.e. in the world, a timer may goes off, or a ball
+-- hits a barrier. This is a hypothetical time, since it's in the future and the user
+-- may interrupt, triggering any number of things which happen sooner. So the dispatcher
+-- can be woken up early and that future is cancelled.
+
+-- When the future is cancelled, any work done to get that time is invalid, and something
+-- somehow needs to start a recomputation from some point.
+
+
+-- In the current interrupting algorithm, we attempt to save time by cutting the world
+-- at the event time, a starting from there from then on.
+
+-- But if multiple interruptions occur within the frame, we rebuild the entire world.
+-- Each time. One way to avoid this is to remember the external events in this frame
+-- so far, then recompute starting from the original world, then seek to the current
+-- time. Now hypothetically, more work was done, but no new full world state was constructed.
+-- Pieces of world are constructed for communication between components, but I don't
+-- need to deep seq anything now. Also, for a fast frame rate, the difference between
+-- recomputing from start and from middle of the frame may not be very much. For this
+-- to work, the input events need to be saved and replayed before re-seeking. Not sure
+-- if this difference is much of a difference. If the current algorithm is the
+-- eager interrupting algorithm, this could be called the rewinding algorithm.
+-- Well, this theoretically recomputes more than the eager algorithm, but produces
+-- less intermediate states? Yes because if most components would not react to the
+-- input, their intermediate state has not changed anyway.
+
+-- Even time varying components which didn't change behavior would not have their
+-- generator updated...
+
+-- On constructing states. The cut operation or just the world arrow applied to input
+-- results in stream or streams of data, and a final state. The final state is likely
+-- a big record, but is only constructed at the end. But the data stream is likely a
+-- record of streams of values. These streams may depend recursively on themselves over
+-- the course of a frame. Within them are intermediate states, but much fewer of them
+-- because many components don't changes at the time others do.
+
+-- example 'stream record'
+-- World {
+--   worldPicture  :: V Picture -- V f t1 _
+--   worldMissiles :: E (IO ()) -- (t2,io):_
+-- }
+--
+-- EV b a = (E b, V a)
+
+{-
+data MouseEV = MouseEV {
+  click  :: E Int,
+  motion :: E Float2,
+  mouse  :: V Float2
+}
+-}
+
+-- example of component (stream function)
+-- slider :: F () (MouseEV, V Float) (E Float, V Picture)
+-- slider :: F () (MouseEV, V Float) (E Float, V Picture)
+
+-- the slider has two behaviors that don't interact.
+-- 1. on mouse events, potentially output update events
+-- 2. the picture is a function of some other value, hopefully reflecting desired changes
+
+
+
+-- so now we have new terminology for driver algorithms.
+-- a *commit* is where an updated current state replaces the existing 'start' state
+--   and the input sequence up to that point is discarded. The time pointer is set to zero.
+-- A commit happens naturally at the end of a frame, before a new frame begins.
+-- This is because the state at the end of frame is returned, so might as well use it.
+
+-- A commit can be performed in the middle of a frame. But it requires recomputing the
+-- frame, because the whole thing is based on Time -> a -> s -> (b,s). The frame length
+-- is passed to the function, and everything uses that to know when to stop processing
+-- and return the current state or form an "intermediate state". If the time changes, 
+-- many states will not change, but intermediate states of physics engine will vary
+-- critically on the commit time.
+
+-- The cost of recomputing a frame is low if you haven't had many events happen and have
+-- not looked at the final state yet. This is regardless of frame length. So I'm calling
+-- this the complexity of a frame, which increases with continuous time. Each time an
+-- event occurs somewhere, be it from external source or internally generated, complexity
+-- increases. If a frame runs on for a long time or if many things occur quickly, you
+-- get more complexity, and the cost of doing an early commit increases. Each time you
+-- perform a commit, the new frame begins with minimal complexity. The commit itself has
+-- a cost, and rewind seeking has a cost depending on complexity. At some point they
+-- balance.
+
+-- (side note, the idea that "we shouldn't restart a frame (for whatever reason) because
+-- we have already done work that will be done *again* just to get back to the point of
+-- divergence" is not always correct. Work is performed each time we cross through a
+-- punctuation or event, but no work is performed as time passes through a time varying
+-- value. If no events have happened yet, for instance, then no work has been done yet.
+-- This means the most extreme rate to do commits that makes sense is to commit after
+-- any event or punctuation. We suspect that this more costly than restarting sometimes.)
+
+-- Jargon for the act of restarting the frame with updated or frame length? Reseeking?
+
+-- imagine commit on every event (eager commit strategy) as smooth flow followed by
+-- a big deepseq construction of the entire app state. If several events occur in short
+-- time, especially if they were all predicted, this is expensive. Eager commit is
+-- costly.
+
+-- alternatively, imagine an infinite frame. Then there is smooth flow until an event
+-- occurs, at which time we handle the event, and continue traversing the output stream.
+-- The app state is never reconstructed, and we do minimal work. However the input
+-- can't be changed at any point. Call this an unreactive behavior.
+-- * integrators would need to be written to do their own periodic internal commits
+
+-- So eager commit allows reactivity but is the most costly. An unreactive behavior is
+-- the cheapest but there is not responsive to newly discovered input.
+
+-- A third strategy is to commit at regular time intervals, at which time input is also
+-- applied. This is called the "sample rate" by conal. This doesn't commit as much as
+-- eager, and is reactive, but there is a delay. To reduce the max delay, increase the
+-- "sample rate", which causes commits more often. Note in this case commits happen
+-- regardless of if there's any input or changes of any sort! In case there are seldom
+-- changes eager is actually better than this third strategy!
+
+-- So we need a 4th strategy!
+
+-- 1. Eager commit (commit on every event, and end of frame)
+-- 2. Unreactive behavior (never commit, use infinite frame)
+-- 3. Periodic commit (commit periodically and introduce new input late)
+-- 4. ? (commit sometimes, reseeking sometimes)
+
+-- eager commit with a long frame length may actually good for some apps, like desktop apps
+-- periodic commit is standard for a video game, where people indeed complain about latency
+-- unreactive behavior can work for a demo, movie, or a recording
+
+-- I believe there is a method that is cheaper and more responsive than those 3 strategies.

@@ -42,7 +42,7 @@ import Level
 import Event
 import Rainbow
 
-import Device
+import Device hiding (F2)
 import Film
 
 import Data.Profunctor
