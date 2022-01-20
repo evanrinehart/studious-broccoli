@@ -3,6 +3,14 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE InstanceSigs #-}
+--{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE DeriveFunctor #-}
 module Driver3 where
 
 import Data.Time
@@ -14,6 +22,8 @@ import Control.Monad.State
 import Data.List.NonEmpty as NE
 import Data.Semigroup
 import Data.Foldable
+
+import Data.Proxy
 
 import TimeData
 import Component
@@ -316,14 +326,116 @@ respond :: MVar a -> a -> Driver i o ()
 
 
 
--- monotone time stream functions
-data TS a = TS a Time (TS a)
---type Com i o = TS i -> TS o
---type V a = TS (Time -> a)
---type E a = TS (Maybe a)
+{-
 
-class Behavior b where
-  type Chunk b
 
-  fromStream :: TS (Chunk b) -> b
-  toStream :: b -> TS (Chunk b)
+
+class Chunky t where
+  type ChunkOf t :: *
+  subdiv :: Proxy t -> Time -> ChunkOf t -> (ChunkOf t, ChunkOf t)
+  fromStream :: TS (ChunkOf t) -> t
+  toStream   :: t -> TS (ChunkOf t)
+
+instance Chunky (K a) where
+  type ChunkOf (K a) = a
+  subdiv _ _ x = (x,x)
+  fromStream ts = K ts
+  toStream (K ts) = ts
+
+instance Chunky () where
+  type ChunkOf () = ()
+  subdiv _ _ _ = ((),())
+
+instance Chunky (TF a) where
+  type ChunkOf (TF a) = Time -> a
+  subdiv _ _ tf = (tf, tf) -- tf taking absolute time, and domain bounds not represented
+
+instance Chunky (E a) where
+  type ChunkOf (E a) = Maybe a
+  subdiv _ _ Nothing  = (Nothing, Nothing)
+  subdiv _ _ (Just x) = (Just x, Nothing)
+
+  fromStream ts = E $ go (-1/0) ts where
+    go t (TS Nothing l more)  = if isInfinite l then [] else go l more
+    go t (TS (Just x) l more) = if isInfinite l then [(t,x)] else (t,x):go l more
+
+  toStream (E es) = case es of
+    [] -> TS Nothing (1/0) (error "end of time")
+    (t,x):more -> TS Nothing t (go x more)
+      where go prev [] = TS (Just prev) (1/0) (error "end of time")
+            go prev ((t,x):more) = TS (Just prev) t (go x more)
+
+instance (Chunky a, Chunky b) => Chunky (a,b) where
+  type ChunkOf (a,b) = (ChunkOf a, ChunkOf b)
+  subdiv _ t (a,b) =
+    let (a1,a2) = subdiv (Proxy::Proxy a) t a
+        (b1,b2) = subdiv (Proxy::Proxy b) t b
+    in ((a1,b1),(a2,b2))
+
+
+
+data WireNest = WireNest
+  { wn1 :: Maybe Int
+  , wn2 :: Char
+  , wn3 :: Time -> Double
+  , wn4 :: ()
+  }
+
+data SomeFmt = SomeFmt
+  { ws1 :: E Int
+  , ws2 :: K Char
+  , ws3 :: TF Double
+  , ws4 :: ()
+  }
+
+instance Chunky SomeFmt where
+  type ChunkOf SomeFmt = WireNest
+  subdiv :: Proxy SomeFmt -> Time -> WireNest -> (WireNest, WireNest)
+  subdiv Proxy t (WireNest a b c d) =
+    let (a1,a2) = subdiv (Proxy::Proxy (E Int)) t a
+        (b1,b2) = subdiv (Proxy::Proxy (K Char)) t b
+        (c1,c2) = subdiv (Proxy::Proxy (TF Double)) t c
+        (d1,d2) = subdiv (Proxy::Proxy ()) t d
+    in (WireNest a1 b1 c1 d1, WireNest a2 b2 c2 d2)
+  
+
+runCom :: forall i o . (Chunky i, Chunky o) => Com i o -> TS (ChunkOf i) -> TS (ChunkOf o)
+runCom (Com mach) (TS i t1 more) =
+  let Pute o t2 k = mach i in
+  case compare t1 t2 of
+    LT -> let (l,_) = subdiv (Proxy::Proxy o) t1 o in TS l t1 (runCom (k t1) more)
+    GT -> let (_,r) = subdiv (Proxy::Proxy i) t2 i in TS o t2 (runCom (k t2) (TS r t1 more))
+    EQ -> TS o t1 (runCom (k t1) more)
+
+exx :: Com () (K Int, E Int)
+exx = Com (\() -> Pute (2+1, Nothing) (1/0) (const exx))
+
+
+instance Applicative (Com i) where
+  pure x = let loop = Com (\_ -> Pute x (1/0) (const loop)) in loop
+  Com ff <*> Com xx = Com yy where
+    yy i = let Pute a1 b1 c1 = ff i
+               Pute a2 b2 c2 = xx i
+           in Pute (a1 a2) (min b1 b2) (\t -> c1 t <*> c2 t)
+
+
+-- a backward time stream with a complete, infinite, constant past
+prelude :: a -> TU a
+prelude x = TU ((x, 0) : go 0) where
+  go p = (x, -(2 ** p)) : go (p+1)
+
+-- a function of time
+newtype TF a = TF (Time -> a)
+
+-- this time data remains constant over a chunk
+newtype K a = K (TS a)
+
+-- TS (Time -> a) and TS (Maybe a) are isomorphic to B a and E a
+
+-- therefore, if we can construct, transform, and deconstruct TS (Time -> a)
+-- and TS (Maybe a), we technically have an FRP
+
+-- there are other kinds of time data, each with their own chunk type.
+
+
+-}

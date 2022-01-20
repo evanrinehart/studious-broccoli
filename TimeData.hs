@@ -16,6 +16,14 @@ data V a = V (Time -> a) Time (V a)
 at :: V a -> Time -> a
 at (V f p more) t = if t <= p then f t else at more t
 
+{-
+mergeEv :: Semigroup a => E a -> E a -> E a
+mergeEv (E xs) (E ys) = E (go xs ys) where
+  go xs [] = xs
+  go [] ys = ys
+  go ((t1,x):xmore) ((t2,y):ymore) = 
+-}
+
 instance Show (V a) where
   showsPrec d (V _ l more) = if isInfinite l
     then assert (l > 0) $ showParen (d > 10) (showString "V 📈 ∞")

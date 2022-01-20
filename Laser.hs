@@ -19,6 +19,7 @@ module Laser (
   putEvent,
   getNext,
   getLength,
+  (<*><*>),
 
   -- * MTL stuff
 
@@ -160,6 +161,60 @@ runLaser laz frameLen vin ein prior seed = go 0 (\_ _ -> prior) Nothing vin ein 
 runLaze :: Semigroup d => b -> Laser s a b c d na -> Time -> (V a, E c) -> s -> ((V b, E d), s)
 runLaze prior laz frameLen (vin,ein) seed =
   let (vout,eout,s') = runLaser laz frameLen vin ein prior seed in ((vout,eout),s')
+
+-- assuming no more input ever, what's the next activity time of this laser
+--hypotheticalTime :: Laser s a b c d r -> V a -> s -> Time
+--hypotheticalTime (Laser f) vin seed = -- possible, requires simulating the state in such a way
+
+{-
+wrapLaser
+  :: Semigroup d
+  => Laser s vi vo ei eo na -- ^ procedure to run
+  -> b    -- ^ default output before any 'laser' choice is made
+  -> s    -- ^ starting state
+  -> Incr vi ei vo eo
+wrapLaser laz_0 prior seed = wrap 0 (\_ _ -> prior) Nothing seed laz_0 where
+  wrap t laserf dout !s laz = Incr
+    { incrV = \vi -> eternal (vi <*><*> laserf)
+    , incrE = \vi -> dout
+    , incrHNAT = \vi -> hypotheticalTime laz s
+    , incrBurn = \vi delta -> let (laserf', s', dout', laz') = freeWheel laz vi delta s
+                              in wrap (t+delta) laserf' dout' s' laz'
+    , incrPut = \vi x -> let (laserf', s', dout', laz') = whenSuddenly laz vi s x
+                         in wrap t laserf' dout' s' laz'
+    }
+
+  done laserf = Incr
+    { incrV = \vi -> eternal (vi <*><*> laserf)
+    , incrE = \_ -> Nothing
+    , incrHNAT = 1/0
+    , incrBurn = \_ _ -> done laserf
+    , incrPut = \_ _ -> done laserf }
+
+  -- freeWheel and whenSuddenly execute the laser program with different context
+  -- until different stopping conditions:
+
+  -- freeWheel
+  whenSuddenly laz vi !s x = -- run the laser program with an input, 
+
+    in case f t (vs `at` t) occ s of
+      Pure _ -> (eternal (vs <*><*> laserf), toE t dout, s)
+      Impure action -> case action of
+        GetLength k -> go t laserf dout vs es s (Laser (k frameLen))
+        GetNext k ->
+          let answer = case es of E [] -> Nothing; E ((next,_):_) -> Just next
+          in go t laserf dout vs es s (Laser (k answer))
+        Chlaser newf k ->
+          let (voutmore, eoutmore, s') = go t newf dout vs es s (Laser k)
+          in (V (vs <*><*> laserf) t voutmore, eoutmore, s')
+        Seek target k -> case dout of
+          Nothing -> go target laserf Nothing vs es s (Laser k)
+          Just d ->
+            let (voutmore, E dmore, s') = go target laserf Nothing vs es s (Laser k)
+            in (voutmore, E ((t,d):dmore), s')
+        PutS s' k -> go t laserf dout vs es s' (Laser k)
+        Emit d k -> go t laserf (dout <> Just d) vs es s (Laser k)
+-}
         
 nextEv :: E a -> Maybe (Time, a)  
 nextEv (E []) = Nothing
