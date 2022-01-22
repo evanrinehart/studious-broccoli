@@ -25,6 +25,10 @@ import Data.List.NonEmpty (NonEmpty(..))
 import Data.Maybe
 import Control.Applicative
 import Data.Profunctor
+import Data.Void
+
+import System.IO.Unsafe (unsafePerformIO)
+import Control.Concurrent
 
 type Time = Double
 
@@ -37,15 +41,41 @@ type Time = Double
 -- But the instances for basic classes are very simple. And we might have some combinators
 -- to help isolate components from each others fragmentation.
 
--- | A morphism in a category where objects are timed sequences of 'Symbol's
--- and arrows are causal transducers.
+-- | Causal transducer of timed sequence of symbols to be used as a proxy for synchronous
+-- deterministic continuous time dataflow programming.
 --
--- @[[Nom i o]] = Frags i -> Frags o (causal)@
+-- \[
+-- ⟦{\tt Nom\ i\ o}⟧ = {\tt [(i, Time)]} \xrightarrow[causal]{} {\tt [(o,Time)]}
+-- \]
 --
--- Here @i@ and @o@ are instances of 'Symbol', though it's not enforced everywhere.
+-- Here @i@ and @o@ meant to be instances of 'Sym'. The paired 'Time' is the fragment length.
+-- The symbol in each fragment represent a continuum of values (or lack thereof) over
+-- the given time span. Which may be infinite.
+--
+-- A given 'Nom' consumes 1 symbol (but not the input fragment size) and outputs 1 fragment
+-- (including symbol and size) along with a continuation (see 'Yex'). The continuation goes three ways:
+-- the input was shorter than the output, the output was shorter than the input, or there
+-- was a tie. This lets the Nom react to being interrupted by new information if it wants to.
+--
+-- The input size is not immediately provided with the input symbol because of the causal restriction.
+-- In general we don't know that information yet.
+--
+-- Some symbol types (e.g. 'V') represent varying values. Valid ways for a 'Nom' to compute with these
+-- include: sampling at the current time, outputting a varying value that is a causally
+-- transformed version of the current input, or a causally transformed version of a past fragment.
+--
+-- Mistakenly using acausal transformations or sampling, using future information for a result now,
+-- can produce confusing results. Not officially supported.
+--
+-- Coherence: Many fragmentations, when glued together, produce the same behavior.
+-- For 'Nom's to be construed as a proxy for causal transformation of behaviors, then the results
+-- shouldn't depend on the particulars of the fragmentation. This module unfortunately provides
+-- no real help in this department. Some basic advice, don't respond to non-occurrences of events
+-- at a time you otherwise wouldn't have done anything. Place a sentry to isolate inner 'Nom's from
+-- fragmentation when nothing of interest has happened, which should also improve performance.
 data Nom i o = Nom { stepNom :: i -> Yex i o } deriving Functor
 
--- | A chunk of output from a Nom paired with a continuation. The losing continuation
+-- | A chunk of output from a 'Nom' paired with a continuation. The losing continuation
 -- is only valid for times less than yexSize.
 data Yex i o = Yex
   { yexOut  :: o
@@ -53,7 +83,19 @@ data Yex i o = Yex
   , yexNext :: WinLose -> Nom i o }
       deriving Functor
 
-data WinLose = Win | LoseAt Time | Tie deriving (Eq,Ord,Show,Read)
+instance Show o => Show (Yex i o) where
+  showsPrec d (Yex o size _) = showParen (d > 10) $
+    ( showString "Yex "
+    . showsPrec 11 o
+    . showString " "
+    . shows size
+    . showString " k" )
+
+data WinLose
+  = Win  -- ^ The output chunk was shorter than the input chunk.
+  | LoseAt Time -- ^ Input chunk ended first (time given) and previous output was truncated.
+  | Tie -- ^ The output chunk and input chunk ended simultaneously.
+      deriving (Eq,Ord,Show,Read)
 
 -- | Parallel composition.
 instance Applicative (Nom i) where
@@ -64,7 +106,7 @@ instance Applicative (Yex i) where
   pure x = Yex x (1/0) (const (pure x))
   Yex f size1 k1 <*> Yex x size2 k2 = Yex (f x) (min size1 size2) (liftA2 (<*>) k1 k2)
 
--- | Lift (causal) functions on chunks to a stateless Nom
+-- | Lift (causal) functions on symbols to a stateless transducer.
 instance Arrow Nom where
   arr f = let go = Nom (\i -> Yex (f i) (1/0) (const go)) in go
   Nom f *** Nom g = Nom $ \(i1,i2) ->
@@ -85,15 +127,28 @@ instance Profunctor Nom where
   lmap g (Nom nom) = Nom (\i -> let Yex x s k = nom (g i) in Yex x s (lmap g . k))
   rmap f (Nom nom) = Nom (\i -> let Yex x s k = nom i in Yex (f x) s (fmap f . k))
 
-newtype Frags a = Frags [(a,Time)] deriving (Show,Functor)
+-- | When @c@ is an instance of 'Sym', a @Tape c@ can be interpreted as
+-- a time varying haskell value slice. The type of the slice depends on @c@.
+--
+-- @
+-- slice :: SymType -> Type
+-- slice (V a) = a
+-- slice (K a) = a
+-- slice (E a) = Maybe a
+-- slice () = ()
+-- slice (c,d) = (slice c, slice d)
+-- slice (c -> d) = c -> d*
+-- @
+--
+-- where @a@ is any haskell type and @c@, @d@ are symbol types.
+-- 
+-- \* The function symbol represents non-varying function on symbols, not arbitrary haskell types.
+--   Use @K (a -> b)@ or @V (a -> b)@ for that.
+newtype Tape a = Tape [(a,Time)] deriving (Show,Functor)
 
-class Symbol a => Burn a where
-  burn :: Time -> a -> a
-
--- | Run a Nom over some input chunks. The last chunk, if it exists, may be infinite.
--- It takes input in format i and produces output in format o.
-transduce :: Burn i => Nom i o -> Frags i -> Frags o
-transduce n (Frags xs) = Frags (go n xs) where
+-- | Consider a 'Nom'@ i o@ to be a causal transducer of 'Tape's.
+transduce :: (Sym i, Sym o) => Nom i o -> Tape i -> Tape o
+transduce n (Tape xs) = Tape (go n xs) where
   go (Nom _) [] = []
   go (Nom nom) ((i,isize):more) =
     let Yex o osize k = nom i in
@@ -103,115 +158,143 @@ transduce n (Frags xs) = Frags (go n xs) where
       GT -> (o,isize) : go (k (LoseAt isize)) more
 
 -- | Feedback composition. The output chunk is immediately available on 2nd input channel.
--- The resulting Nom may be more or less undefined.
+-- The resulting 'Nom' may be more or less undefined.
 feedback :: Nom (i,o) o -> Nom i o
 feedback (Nom nom) = Nom (\i -> let Yex o size k = nom (i,o) in Yex o size (feedback . k))
+
+-- | To negate or eliminate (something, such as an element in a dialectic process) but
+-- preserve as a partial element in a synthesis.
+sublate :: Nom i o -> Nom o i -> Void
+sublate (Nom n1) (Nom n2) =
+  let Yex o size1 k1 = n1 i
+      Yex i size2 k2 = n2 o in
+  case compare size1 size2 of
+    LT -> let n1' = k1 Win; n2' = k2 (LoseAt size1) in sublate n1' n2'
+    EQ -> let n1' = k1 Tie; n2' = k2 Tie            in sublate n1' n2'
+    GT -> let n1' = k1 (LoseAt size2); n2' = k2 Win in sublate n1' n2'
+
+ping :: Nom () (E Char)
+ping = Nom start where
+  start ~() = Yex (E (Just 'c')) 1 (waiting 1) where
+    waiting _ Win = Nom start
+    waiting _ Tie = Nom start
+    waiting timer (LoseAt t) =
+      let timer' = timer - t
+      in Nom (\() -> Yex (E Nothing) timer' (waiting timer'))
+
+term :: Nom (E Char) ()
+term = Nom (const start) where
+  start :: Yex (E Char) ()
+  start = Yex () (1/0) k
+  k :: WinLose -> Nom (E Char) ()
+  k Win = error "end of time"
+  k Tie = error "end of time"
+  k (LoseAt t) =
+    let us = floor (t * 1000000)
+        !del = unsafePerformIO (threadDelay us)
+    in Nom $ \i -> case i of
+      E Nothing  -> start
+      E (Just c) -> unsafePerformIO (putStrLn [c]) `seq` start
+
+
+-- | Act like given guest 'Nom' until an event carrying a new guest arrives.
+-- At the time of the event, there's no time for the old guest to react. It's replaced immediately
+-- and processes the input it showed up with.
+host :: Nom i o -> Nom (E (Nom i o), i) o
+host (Nom guest) = Nom $ \(E mg, i) -> case mg of
+  Nothing           -> let Yex o size k = guest  i in Yex o size (host . k)
+  Just (Nom guest') -> let Yex o size k = guest' i in Yex o size (host . k)
+  
+
+-- | The wrapped 'Nom' that would not otherwise be disturbed is only interrupted by a new
+-- input fragment if it passes a test. When the test fails the original output (already in progress)
+-- is used, saving on some recomputation cost.
+sentry :: Sym o => (i -> Bool) -> Nom i o -> Nom i o
+sentry p (Nom nom) = Nom openMode where
+  openMode i = let y@(Yex o size k) = nom i in Yex o size (closedMode y)
+  closedMode (Yex _ _ oldK) Win = sentry p (oldK Win)
+  closedMode (Yex _ _ oldK) Tie = sentry p (oldK Tie)
+  closedMode (Yex oldOut oldSize oldK) (LoseAt t) = Nom $ \i -> if p i
+    then
+      let Nom nom' = oldK (LoseAt t)
+          y@(Yex o size k) = nom' i
+      in Yex o size (closedMode y)
+    else
+      let o = burn t oldOut
+          size = oldSize - t
+          k = oldK . (ageLosing t)
+      in Yex o size (closedMode (Yex o size k))
+  ageLosing dt Win = Win
+  ageLosing dt Tie = Tie
+  ageLosing dt (LoseAt t) = LoseAt (t + dt)
+  
 
 
 -- | A symbol contains enough information to reconstruct a finite part of a Behavior.
 -- They also serve to describe the format of a fragment stream.
--- (Name conflict with GHC type level strings also called Symbol.)
-class Symbol a where
-  type Slice a :: *
-  sampleAt :: Time -> a -> Slice a
-  frozen :: Slice a -> a
+class Sym a where
+
+  -- | Burn away an initial segment of a fragment.
+  burn :: Time -> a -> a
+
+  default burn :: (Generic a, Sym' (Rep a)) => Time -> a -> a
+  burn t x = to (burn' t (from x))
 
 
+-- | A product of symbols is used to represent a multi-channel signal.
+instance (Sym a, Sym b) => Sym (a,b) where
+  burn dt (x,y) = (burn dt x, burn dt y)
 
-instance (Symbol a, Symbol b) => Symbol (a,b) where
-  type Slice (a,b) = (Slice a, Slice b)
-  sampleAt t (x,y) = (sampleAt t x, sampleAt t y)
+instance (Sym a, Sym b, Sym c) => Sym (a,b,c)
+instance (Sym a, Sym b, Sym c, Sym d) => Sym (a,b,c,d)
+
     
--- | The function channel is interpreted as a frag-constant function on encoded fragments.
--- Allows Applicative to make sense.
-instance (Symbol a, Symbol b) => Symbol (a -> b) where
-  type Slice (a -> b) = Slice a -> Slice b
-  sampleAt t g x = let x' = frozen x in sampleAt 0 (g x')
-  
+-- | The function channel is interpreted as a non-varying function on symbols.
+-- For Applicative convenience.
+instance (Sym a, Sym b) => Sym (a -> b) where
+  burn dt f = f
 
--- | Piecewise constant value channel.
-newtype K a = K a
+-- | Piecewise constant channel.
+newtype K a = K a deriving (Eq,Ord,Show,Read)
 
 -- | Event channel.
-newtype E a = E (Maybe a)
+newtype E a = E (Maybe a) deriving (Eq,Ord,Show,Read)
 
 -- | Varying value channel.
-data V a = V Time (Time -> a)
+data V a = V !Time (Time -> a)
 
-instance Symbol (K a) where
-  type Slice (K a) = a
-  sampleAt _ (K x) = x
-  frozen x = K x
+instance Show (V a) where
+  showsPrec d (V off _) = showParen (d > 10) $ 
+    ( showString "V "
+    . shows off
+    . showString " 📈" )
 
-instance Symbol (E a) where
-  type Slice (E a) = Maybe a
-  sampleAt t (E mx) = if t > 0 then Nothing else mx
-  frozen mx = E mx
+-- | Piecewise constant value in time.
+instance Sym (K a) where
+  burn _ (K x) = K x
 
-instance Symbol (V a) where
-  type Slice (V a) = a
-  sampleAt t (V off f) = f (t + off)
-  -- decode = sampleAt (not zero)
-  frozen x = V 0 (const x)
+-- | Events that occur at isolated points of time.
+instance Sym (E a) where
+  burn _ _ = E Nothing
 
-instance Symbol () where
-  type Slice () = ()
-  sampleAt _ _ = ()
-  -- decode = sampleAt  anywhere
-  frozen _ = ()
+-- | General time-varying value.
+instance Sym (V a) where
+  burn dt (V off f) = V (off + dt) f
 
-
+-- | The unit symbol indicates steady @()@ forever in time.
+instance Sym () where
+  burn _ _ = ()
 
 
--- | A Behavior is a time-varying value.
-class Behavior behavior where
-  at       :: behavior a -> Time -> a
-  embedFun :: (Time -> a) -> behavior a
+-- | Generic products, records of symbols can be used aggregate channels.
+class Sym' f where
+  burn' :: Time -> f p -> f p
 
-instance Behavior ((->) Time) where
-  at       = id
-  embedFun = id
+instance (Sym' f) => Sym' (M1 i t f) where
+  burn' t (M1 x) = M1 (burn' t x)
 
--- | Glue all the fragments together to get a Behavior. The inverse of 'shatter'.
-heal :: (Symbol a, Behavior b) => Frags a -> b (Slice a)
-heal (Frags xs) = embedFun $ \t ->
-  let go ptr ((sym,l):more) =
-        let ptr' = ptr + l in
-        if t < ptr'
-          then sampleAt (t - ptr) sym
-          else go ptr' more
-      go _ [] = error "ran out of time"
-  in go 0 xs
+instance (Sym c) => Sym' (K1 i c) where
+  burn' t (K1 x) = K1 (burn t x)
 
--- | A behavior that can be reduced to a sequence of symbols in different ways.
-class Behavior b => Symbolizable b where
-  symbolizeAt :: Symbol a => b (Slice a) -> Time -> (a, Time)
-
--- | (currently broken) Break up a behavior into symbolic fragments. Regardless of
--- the chosen fragmentation 'heal' returns the original behavior.
-shatter :: (Symbol a, Symbolizable b) => [Time] -> b (Slice a) -> Frags a
-shatter (base:ts) b = Frags (go base ts) where
-  go t more = 
-    let (x, size) = symbolizeAt b t in
-    case more of
-      [] -> [(x, size)]
-      (t':more') -> go t' more'
-
--- What is a Behavior? I.e. Frags (V a) ==> Time -> a
--- What is a Behavior? I.e. Frags (E a) ==> [(Time, a)]
--- What is a Behavior? I.e. Frags (K a) ==> [(a, Time)]
--- What is a Behavior? I.e. Frags (V a, E a) ==> (Time -> a, [(Time, a)]) ?
--- What is a Behavior? I.e. Frags (V a -> E a) ==> [(V a -> E a, Time)] (mostly uninterpreted)
-
--- a Behavior indexed by symbol a is a function Time -> Slice a
--- where Slice describes what you would see if you sampled the function.
--- Slice (K a) = a
--- Slice (E a) = Maybe a
--- Slice (V a) = a
--- Slice (s1,s2) = (Slice s1, Slice s2)
--- Slice (s1 -> s2) = s1 -> s2 -- ??
-
--- is Behavior Applicative?
--- B (u -> v) -> B u -> B v ?
--- (Time -> u -> v) -> (Time -> Slice u) -> Time -> Slice v ?
--- "proof" \ff fu t -> ff t
+instance (Sym' f, Sym' g) => Sym' (f :*: g) where
+  burn' t (x :*: y) = (burn' t x :*: burn' t y)
