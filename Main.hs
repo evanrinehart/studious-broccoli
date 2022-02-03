@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE NegativeLiterals #-}
 module Main where
 
 import Data.IORef
@@ -23,6 +24,8 @@ import qualified Data.Map as M; import Data.Map (Map)
 import qualified Graphics.UI.GLFW as GLFW
 --import Graphics.GL
 
+import Codec.Picture as JuicyPixels
+
 import Common
 import Glue
 import Event
@@ -39,6 +42,9 @@ import CardGame
 import Arkanoid
 import Level
 import Grid
+
+import OneShot
+import Shape
 
 
 -- concentrate on getting widgets to work
@@ -300,7 +306,7 @@ main = do
   -- setup graphics
   let scale = 1
   -- let there be a window plus graphics
-  (win,gfx) <- rainbow "o_O" (floor logicalW) (floor logicalH) scale -- create window load graphics
+  (win,gfx) <- rainbow "" (floor logicalW) (floor logicalH) scale -- create window load graphics
 
 
   -- setup "data sources", some of which backed by IORef
@@ -346,7 +352,7 @@ main = do
   --slider1   <- makeSlider gfx (F4 (-320) (-240) 20 480) mats peek1 upd1
   --slider2   <- makeSlider gfx (F4 ((-320) + 20) (-240) 20 480) mats peek2 upd2
   --slider3   <- makeSlider gfx (F4 ((-320) + 40) (-240) 20 480) mats peek3 upd3
-  --anim     <- makeAnimation gfx
+  --anim      <- makeAnimation gfx
 
   --globalMouseTranslator win . quitOnEscape win
 
@@ -361,17 +367,47 @@ main = do
 
     --blitCanvas gfx canvas (F2 0 (-240))
 
+  --let torch = splat (blackOnWhite Ball) (F4 -0.75 -0.75 1 1)
+  let torch0 w = splat (blackOnWhite Ball)
+                    w (F4 (-320 + 16) (240 - 16) 32 32)
+  let torch1 w = splat (BGColor (C 1 1 1) (Layer (Colorize (C 1 0.5 0) (Trigon (F2 0 0) (F2 0.5 1) (F2 1 0))) (Colorize (C 0 0.5 0) (Axigon (F4 -0.5 -0.5 1 1)))))
+                    w (F4 (-320 + 3*16) (240 - 16) 32 32)
+  let torch2 w = splat (BGColor (C 1 1 1) $ Colorize (C 0 0.5 1) (Trigon (F2 -0.5 -0.5) (F2 0 0.5) (F2 0.5 -0.5)))
+                    w (F4 (-320 + 5*16) (240 - 16) 32 32)
+  let torch3 w = splat (BGColor (C 1 1 1) $ Colorize (C 1 0 0) (Minus Ball (Xform (F4 1.25 0 0 1.25) Ball)))
+                    w (F4 (-320 + 7*16) (240 - 16) 32 32)
+
+{-
+  (pic1,pic2) <- loadExample
+  let imglib name = case name of "shovel" -> pic1; "yoshi" -> pic2; _ -> pic2
+  let tpd = texParamDefaults
+  let shot = example [TexImage (LibraryImg "shovel") tpd, TexImage (LibraryImg "yoshi") tpd]
+  img <- imageOneShot imglib 640 480 shot
+  JuicyPixels.savePngImage "mypicture.png" img
+-}
+
+  dims <- readIORef (gfxPhysicalWindowDimensions gfx)
+  torch0 dims
+  torch1 dims
+  torch2 dims
+  torch3 dims
+
   mainLoop $ MainLoop{
     mlClock=ticker,
     mlDoEvents=GLFW.pollEvents,
     mlDoTick=do
-      uaTick masterAction 1,
+      return (),
+--      uaTick masterAction 1,
     mlRender=do
-      clearColorBuffer 0.1 0.1 0.2
-      ws <- readIORef widgetsV
-      forM_ ws (repaintWidget gfx . snd)
-      forM_ (reverse ws) (blitWidget gfx . snd)
-      GLFW.swapBuffers win
+--      clearColorBuffer 0.1 0.1 0.2
+--      ws <- readIORef widgetsV
+--      forM_ ws (repaintWidget gfx . snd)
+--      forM_ (reverse ws) (blitWidget gfx . snd)
+--        clearColorBuffer 1 1 0
+        --renderOneShot imglib shot
+        
+        GLFW.swapBuffers win
+        return ()
       ,
     mlDead=GLFW.windowShouldClose win
   }

@@ -2,6 +2,9 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeFamilies #-}
 module Paint where
 
 import Data.Functor.Const
@@ -9,11 +12,16 @@ import Data.Functor.Identity
 import GHC.TypeLits
 import Data.Proxy
 
+import Data.Int
+
 import Control.Monad.Reader
 
 import HList
 import Glue
 import Common
+
+
+import Unsafe.Coerce (unsafeCoerce) -- temporary
 
 -- A combination of VAO, shader, and uniform locations.
 -- The uniform locations takes the form of an IO action
@@ -30,7 +38,7 @@ configUniforms = unlock
 
 -- initialize paint by getting uniform locations
 buildGate :: Shader -> RecF Frame ps -> IO (Gate ps)
-buildGate shader = fmap Gate . rMapWithNamesM g where
+buildGate shader = fmap Gate . rMapWithNamesM (unsafeCoerce g) where
   g name (Frame setter) = do
     ul <- fmap UL $ getUniformLocation shader name
     return (Func (setter ul))
@@ -47,6 +55,88 @@ ug4f next = (\(UL i) (F4 x y z w) -> setUniform4f i x y z w) `frame` next
 
 capstone :: RecF Frame '[]
 capstone = R0
+
+
+-- want e.g. '[("foo",Float2),("bar",Float3)] to yield a function of type
+-- Float2 -> Float3 -> Shader -> IO ()
+-- which calls setUniform with the proper UL and correctly typed value.
+-- we also want to get the ULs in the first place, using their string name.
+-- (currently, we side stepped the getting UL directly by combining the getting with
+-- the construction of the setter. maybe we can do it separately)
+
+-- lets start with getting the ULs.
+
+type Eg = ['("foo", Float2), '("bar", Float3)]
+
+data UniLoc a = UniLoc Int32 (Int32 -> a -> IO ())
+
+setUniforms :: RecF UniLoc ts -> Rec ts -> Shader -> IO ()
+setUniforms R0 R0 _ = return ()
+setUniforms (R1 (UniLoc i setter) is) (R1 (Identity x) xs) sh = do
+  setter i x
+  setUniforms is xs sh
+
+class Uniforms ts where
+  getLocs :: Shader -> IO (RecF UniLoc ts)
+  getNames :: Proxy ts -> [String]
+
+instance Uniforms '[] where
+  getLocs _ = return R0
+  getNames _ = []
+
+instance (KnownSymbol name, Show t, UniType t, Uniforms ts) => Uniforms ('(name,t) ': ts) where
+  getLocs sh = do
+    let name = symbolVal (Proxy :: Proxy name)
+    i <- getUniformLocation sh name
+    is <- getLocs sh
+    return (UniLoc i setUni `R1` is)
+
+  getNames _ = symbolVal (Proxy :: Proxy name) : getNames (Proxy :: Proxy ts)
+  
+
+class UniType a where
+  setUni :: Int32 -> a -> IO ()
+
+instance UniType Float2 where
+  setUni i (F2 x y) = setUniform2f i x y
+
+instance UniType Float3 where
+  setUni i (F3 x y z) = setUniform3f i x y z
+
+instance UniType Float4 where
+  setUni i (F4 x y z w) = setUniform4f i x y z w
+
+data Sampler2D = Sampler2D Int32 deriving Show
+
+instance UniType Sampler2D where
+  setUni i (Sampler2D n) = setUniform1i i n
+
+
+
+
+{-
+class UniField t where
+  name :: t -> String
+
+instance UniField '(Symbol, x) where
+  
+
+class Uniforms ts where
+  names :: ts -> [String]
+  locations :: ts -> Shader -> IO [(String, Int)]
+
+instance Uniforms (Rec []) where
+  names _ = []
+
+instance (Uniforms ts, UniField t) => Uniform (Rec (t ': ts)) where
+  names (R1 x xs) = name x : names xs
+  
+  
+
+-- we should be able to generate the gate blocks from the type itself, like the Printf class.
+goal :: UniField ps -> 
+-}
+
 
 
 -- internal stuff

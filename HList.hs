@@ -5,11 +5,15 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE FlexibleInstances #-}
 module HList where
 
 import Data.Functor.Const
 import Data.Functor.Identity
 import Data.Proxy
+import Data.List
+
+import Text.Read
 
 import GHC.TypeLits
 
@@ -52,6 +56,30 @@ newtype Field (n::Symbol) a = Field a
 infixr 5 >:
 (>:) :: KnownSymbol n => Field n a -> Rec ps -> Rec ('(n,a) : ps)
 (Field x) >: xs = Identity x `R1` xs
+
+fieldNames :: RecF f ts -> [String]
+fieldNames R0 = []
+fieldNames ent@(R1 x xs) = case ent of
+  (_ :: KnownSymbol n => RecF f ('(n,t) : qs)) -> symbolVal (Proxy :: Proxy n) : fieldNames xs
+
+class ShowRec ts where
+  showRec :: Rec ts -> [String]
+
+instance ShowRec '[] where
+  showRec R0 = []
+
+instance (Show t, ShowRec ts) => ShowRec ('(name,t) ': ts) where
+  showRec (R1 (Identity x) xs) = show x : showRec xs
+
+instance ShowRec ts => Show (Rec ts) where
+  showsPrec d r = 
+    let ls = fieldNames r
+        vs = showRec r in 
+    ( showString "{"
+    . showString (intercalate "," (zipWith (\x y -> x ++ "=" ++ y) ls vs))
+    . showString "}" )
+
+
 
 
 

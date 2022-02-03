@@ -13,6 +13,8 @@ data Float4 = F4 !Float !Float !Float !Float deriving Show
 data Rect a = Rect !a !a !a !a
 type RGB = Float3
 
+type XYWH = Float4
+
 newtype Glyph = Glyph Int
 
 fi :: (Integral a, Num b) => a -> b
@@ -53,12 +55,12 @@ onSnd f (x,y) = (x,f y)
 
 deleteAt :: Int -> [a] -> [a]
 deleteAt 0 (_:xs) = xs
-deleteAt i (x:xs) = x : deleteAt (i-1) xs
+deleteAt i (x:xs) = x : deleteAt (i - 1) xs
 deleteAt _ [] = error "index out of bounds"
 
 insertAt :: Int -> a -> [a] -> [a]
 insertAt 0 z (x:xs) = z : x : xs
-insertAt i z (x:xs) = x : insertAt (i-1) z xs
+insertAt i z (x:xs) = x : insertAt (i - 1) z xs
 insertAt 0 z [] = [z]
 insertAt _ _ [] = error "index out of bounds"
 

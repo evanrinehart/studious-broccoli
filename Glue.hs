@@ -1,7 +1,8 @@
+{-# LANGUAGE TypeApplications #-}
 module Glue where
 
-import Data.Vector.Storable (Vector)
-import qualified Data.Vector.Storable as V
+import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Storable.Mutable as VSM (new, unsafeWith)
 import System.Exit
 import Foreign.Marshal
 import Foreign.Ptr
@@ -9,7 +10,9 @@ import Foreign.ForeignPtr
 import Foreign.Storable
 import Foreign.C.String
 import Control.Monad (when)
+import Control.Exception
 import Data.Word
+import Data.Int
 
 import Graphics.GL
 import Codec.Picture
@@ -26,6 +29,21 @@ newtype UL = UL GLint -- uniform location
 
 type Slapper = Rect Float -> Tex -> IO ()
 
+
+data WrapMode = WrapClampToEdge | WrapRepeat | WrapMirroredRepeat deriving Show
+data TexFilter = NearestFilter | LinearFilter deriving Show
+data TexParams = TexParams
+  { texWrapS   :: WrapMode
+  , texWrapT   :: WrapMode
+  , texMinFilt :: TexFilter
+  , texMagFilt :: TexFilter } deriving Show
+
+texWrap   mode tp = tp { texWrapS = mode, texWrapT = mode }
+texFilter mode tp = tp { texMinFilt = mode, texMagFilt = mode }
+texParamDefaults = TexParams WrapRepeat WrapRepeat LinearFilter LinearFilter
+
+
+
 -- VAO
 newVAO :: IO VAO
 newVAO = do
@@ -36,18 +54,18 @@ useVAO (VAO i) = glBindVertexArray i
 
 -- VBO
 newVBO :: Ptr a -> Int -> IO VBO
-newVBO ptr n = do
+newVBO src n = do
   i <- alloca (\ptr -> glGenBuffers 1 ptr >> peek ptr)
   glBindBuffer GL_ARRAY_BUFFER i
-  glBufferData GL_ARRAY_BUFFER (fromIntegral n) (castPtr ptr) GL_STATIC_DRAW
+  glBufferData GL_ARRAY_BUFFER (fromIntegral n) (castPtr src) GL_STATIC_DRAW
   return (VBO i)
 
 useVBO :: VBO -> IO ()
 useVBO (VBO n) = glBindBuffer GL_ARRAY_BUFFER n
 
-storableVectorToVBO :: V.Vector Float -> IO VBO
+storableVectorToVBO :: VS.Vector Float -> IO VBO
 storableVectorToVBO v = do
-  let (fptr, len) = V.unsafeToForeignPtr0 v
+  let (fptr, len) = VS.unsafeToForeignPtr0 v
   let s = sizeOf (undefined :: Float)
   withForeignPtr fptr $ \ptr -> newVBO ptr (len * s)
 
@@ -115,11 +133,11 @@ pictureToTex :: DynamicImage -> IO (Tex,Int2)
 pictureToTex di = action where
   action = case di of
     ImageRGBA8 (Image w h pixVec) -> do
-      V.unsafeWith pixVec $ \ptr -> do
+      VS.unsafeWith pixVec $ \ptr -> do
         tex <- newTexture GL_RGBA ptr w h
         return (tex, I2 w h)
     ImageRGB8 (Image w h pixVec) -> do
-      V.unsafeWith pixVec $ \ptr -> do
+      VS.unsafeWith pixVec $ \ptr -> do
         tex <- newTexture GL_RGB ptr w h
         return (tex, I2 w h)
     _ -> do
@@ -129,6 +147,7 @@ pictureToTex di = action where
 newTexture :: GLenum -> Ptr Word8 -> Int -> Int -> IO Tex
 newTexture format ptr w h = do
   n <- alloca (\p -> glGenTextures 1 p >> peek p)
+  glActiveTexture GL_TEXTURE0
   glBindTexture GL_TEXTURE_2D n
   glTexImage2D
     GL_TEXTURE_2D
@@ -141,6 +160,8 @@ newTexture format ptr w h = do
     GL_UNSIGNED_BYTE -- image data type 
     (castPtr ptr)
   glGenerateMipmap GL_TEXTURE_2D
+  --glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_REPEAT
+  --glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_REPEAT
   glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
   glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_NEAREST
   return (Tex n)
@@ -163,6 +184,22 @@ newBlankTexture w h = do
 
 useTexture :: Tex -> IO ()
 useTexture (Tex n) = glBindTexture GL_TEXTURE_2D n
+
+useTextureN :: Tex -> Int -> IO ()
+useTextureN (Tex n) unitNo = do
+  case unitNo of
+    0 -> glActiveTexture GL_TEXTURE0
+    1 -> glActiveTexture GL_TEXTURE1
+    2 -> glActiveTexture GL_TEXTURE2
+    3 -> glActiveTexture GL_TEXTURE3
+    4 -> glActiveTexture GL_TEXTURE4
+    5 -> glActiveTexture GL_TEXTURE5
+    6 -> glActiveTexture GL_TEXTURE6
+    7 -> glActiveTexture GL_TEXTURE7
+    _ -> throwIO (userError ("useTextureN _ " ++ show unitNo))
+  glBindTexture GL_TEXTURE_2D n
+  glActiveTexture GL_TEXTURE0
+  
 
 -- FBO
 newFBO :: IO FBO
@@ -200,6 +237,9 @@ getUniformLocation :: Shader -> String -> IO GLint
 getUniformLocation (Shader pr) name =
   withCString name (\ptr -> glGetUniformLocation pr ptr)
 
+setUniform1i :: GLint -> Int32 -> IO ()
+setUniform1i ul i = glUniform1i ul i
+
 setUniform2f :: GLint -> Float -> Float -> IO ()
 setUniform2f ul x y =
   withArray [x,y] $ \ptr -> glUniform2fv ul 1 ptr
@@ -216,6 +256,22 @@ setUniform4f ul x y z w =
 deleteTexture :: Tex -> IO ()
 deleteTexture (Tex n) = do
   withArray [n] $ \ptr -> glDeleteTextures 1 ptr
+
+deleteTextures :: [Tex] -> IO ()
+deleteTextures ts = do
+  let ns = map (\(Tex n) -> n) ts
+  withArray ns $ \ptr -> glDeleteTextures (fromIntegral (length ts)) ptr
+
+deleteVBO :: VBO -> IO ()
+deleteVBO (VBO i) = do
+  withArray [i] $ \ptr -> glDeleteBuffers 1 ptr
+
+deleteVAO :: VAO -> IO ()
+deleteVAO (VAO i) = do
+  withArray [i] $ \ptr -> glDeleteVertexArrays 1 ptr
+
+deleteShader :: Shader -> IO ()
+deleteShader (Shader i) = glDeleteProgram i
 
 deleteFBO :: FBO -> IO ()
 deleteFBO (FBO n) = do
@@ -237,6 +293,38 @@ cullBackFaces = do
   glCullFace GL_BACK 
   glEnable GL_CULL_FACE
 
+
+-- downloading
+{-
+void glReadPixels(
+  GLint x,
+	GLint y,
+	GLsizei width,
+	GLsizei height,
+	GLenum format,
+	GLenum type,
+	GLvoid * data);
+-}
+
+dumpFramebufferRGB :: Int -> Int -> Int -> Int -> IO (VS.Vector Word8)
+dumpFramebufferRGB x y w h = do
+  mbuf <- VSM.new (w * h * 3)
+  let fi = fromIntegral
+  VSM.unsafeWith mbuf $ \ptr -> do
+    glReadPixels (fi x) (fi y) (fi w) (fi h) GL_RGB GL_UNSIGNED_BYTE (castPtr ptr)
+  assertGL "dumpFramebufferRGB:"
+  buf <- VS.freeze mbuf
+  return buf
+
+dumpFramebufferRGBA :: Int -> Int -> Int -> Int -> IO (VS.Vector Word8)
+dumpFramebufferRGBA x y w h = do
+  mbuf <- VSM.new (w * h * 4)
+  let fi = fromIntegral
+  VSM.unsafeWith mbuf $ \ptr -> do
+    glReadPixels (fi x) (fi y) (fi w) (fi h) GL_RGBA GL_UNSIGNED_BYTE (castPtr ptr)
+  assertGL "dumpFramebufferRGBA:"
+  buf <- VS.freeze mbuf
+  return buf
 
 -- errors
 getError :: IO (Maybe String)

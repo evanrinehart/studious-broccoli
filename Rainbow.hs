@@ -33,9 +33,8 @@ data GFX = GFX
   , gfxLogicalWindowDimensions :: IORef Float2
   , gfxPhysicalWindowDimensions :: IORef Int2 }
     
-
 data Canvas = Canvas
-  { canvasWH :: Int2
+  { canvasWH  :: Int2
   , canvasTex :: Tex
   , canvasFbo :: FBO }
 
@@ -376,12 +375,14 @@ glfwRitual title w h scale = do
   GLFW.windowHint (GLFW.WindowHint'ContextVersionMinor 2)
   GLFW.windowHint (GLFW.WindowHint'OpenGLForwardCompat True)
   GLFW.windowHint (GLFW.WindowHint'OpenGLProfile GLFW.OpenGLProfile'Core)
+  --GLFW.windowHint (GLFW.WindowHint'Samples (Just 4))
 
   Just win <- GLFW.createWindow (scale * w) (scale * h) title Nothing Nothing 
   GLFW.makeContextCurrent (Just win)
   GLFW.swapInterval 1
 
   cullBackFaces -- debug only
+  --glEnable GL_MULTISAMPLE
 
   physDims <- newIORef $ I2 (scale * w) (scale * h)
   logiDims <- newIORef $ F2 (fi w) (fi h)

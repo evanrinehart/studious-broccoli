@@ -25,10 +25,6 @@ import Data.List.NonEmpty (NonEmpty(..))
 import Data.Maybe
 import Control.Applicative
 import Data.Profunctor
-import Data.Void
-
-import System.IO.Unsafe (unsafePerformIO)
-import Control.Concurrent
 
 type Time = Double
 
@@ -71,22 +67,25 @@ type Time = Double
 -- For 'Nom's to be construed as a proxy for causal transformation of behaviors, then the results
 -- shouldn't depend on the particulars of the fragmentation. This module unfortunately provides
 -- no real help in this department. Some basic advice, don't respond to non-occurrences of events
--- at a time you otherwise wouldn't have done anything. Place a sentry to isolate inner 'Nom's from
+-- at a time you otherwise would've done nothing. Place a sentry to isolate inner 'Nom's from
 -- fragmentation when nothing of interest has happened, which should also improve performance.
-data Nom i o = Nom { stepNom :: i -> Yex i o } deriving Functor
+data Nom i o = Nom { nomNom :: i -> i -> Yex i o } deriving Functor
 
 -- | A chunk of output from a 'Nom' paired with a continuation. The losing continuation
 -- is only valid for times less than yexSize.
 data Yex i o = Yex
-  { yexOut  :: o
+  { yexPrev :: o
+  , yexOut  :: o
   , yexSize :: Time
   , yexNext :: WinLose -> Nom i o }
       deriving Functor
 
 instance Show o => Show (Yex i o) where
-  showsPrec d (Yex o size _) = showParen (d > 10) $
+  showsPrec d (Yex o0 o1 size _) = showParen (d > 10) $
     ( showString "Yex "
-    . showsPrec 11 o
+    . showsPrec 11 o0
+    . showString " "
+    . showsPrec 11 o1
     . showString " "
     . shows size
     . showString " k" )
@@ -99,36 +98,44 @@ data WinLose
 
 -- | Parallel composition.
 instance Applicative (Nom i) where
-  pure x = let go = Nom (\_ -> Yex x (1/0) (const go) ) in go
-  Nom ff <*> Nom xx = Nom (liftA2 (<*>) ff xx)
+  pure x = let go = Nom (\_ _ -> Yex x x (1/0) (const go) ) in go
+  Nom ff <*> Nom xx = Nom (\i j -> ff i j <*> xx i j)
 
 instance Applicative (Yex i) where
-  pure x = Yex x (1/0) (const (pure x))
-  Yex f size1 k1 <*> Yex x size2 k2 = Yex (f x) (min size1 size2) (liftA2 (<*>) k1 k2)
+  pure x = Yex x x (1/0) (const (pure x))
+  Yex f0 f1 size1 k1 <*> Yex x0 x1 size2 k2 =
+    Yex (f0 x0) (f1 x1) (min size1 size2) (liftA2 (<*>) k1 k2)
 
 -- | Lift (causal) functions on symbols to a stateless transducer.
 instance Arrow Nom where
-  arr f = let go = Nom (\i -> Yex (f i) (1/0) (const go)) in go
-  Nom f *** Nom g = Nom $ \(i1,i2) ->
-    let Yex a1 b1 c1 = f i1
-        Yex a2 b2 c2 = g i2
-    in Yex (a1,a2) (min b1 b2) (liftA2 (***) c1 c2)
+  arr f = let go = Nom (\i0 i1 -> Yex (f i0) (f i1) (1/0) (const go)) in go
+  Nom f *** Nom g = Nom $ \(i0,j0) (i1,j1) ->
+    let Yex o0 o1 size1 k1 = f i0 i1
+        Yex p0 p1 size2 k2 = g j0 j1
+    in Yex (o0,p0) (o1,p1) (min size1 size2) (liftA2 (***) k1 k2)
+
 
 -- | Serial composition.
 instance Category Nom where
-  id = let go = Nom (\i -> Yex i (1/0) (const go)) in go
-  Nom f . Nom g = Nom $ \i ->
-    let Yex a1 b1 c1 = g i
-        Yex a2 b2 c2 = f a1
-    in Yex a2 (min b1 b2) (liftA2 (.) c2 c1)
+  id = let go = Nom (\i0 i1 -> Yex i0 i1 (1/0) (const go)) in go
+  Nom f . Nom g = Nom $ \i0 i1 ->
+    let Yex z0 z1 size1 k1 = g i0 i1
+        Yex o0 o1 size2 k2 = f z0 z1
+    in Yex o0 o1 (min size1 size2) (liftA2 (.) k2 k1)
 
 -- | Pre and post processing of chunks.
 instance Profunctor Nom where
-  lmap g (Nom nom) = Nom (\i -> let Yex x s k = nom (g i) in Yex x s (lmap g . k))
-  rmap f (Nom nom) = Nom (\i -> let Yex x s k = nom i in Yex (f x) s (fmap f . k))
+  lmap g (Nom nom) = Nom $ \i0 i1 -> let Yex o0 o1 s k = nom (g i0) (g i1) in Yex o0 o1 s (lmap g . k)
+  rmap f (Nom nom) = Nom $ \i0 i1 -> let Yex o0 o1 s k = nom i0 i1 in Yex (f o0) (f o1) s (fmap f . k)
 
--- | When @c@ is an instance of 'Sym', a @Tape c@ can be interpreted as
--- a time varying haskell value slice. The type of the slice depends on @c@.
+-- | A timed sequence of symbolic fragments. The time indicates the fragment size.
+-- The symbol encodes a continuum of values during the fragment time.
+--
+-- An infinite fragment at the end of the sequence or an infinite sequence of finite fragments
+-- are both acceptable.
+--
+-- When @c@ is an instance of 'Sym', a @Tape c@ can be interpreted as a continually varying
+-- haskell value slice, aka a behavior. The type of the slice depends on @c@.
 --
 -- @
 -- slice :: SymType -> Type
@@ -146,91 +153,12 @@ instance Profunctor Nom where
 --   Use @K (a -> b)@ or @V (a -> b)@ for that.
 newtype Tape a = Tape [(a,Time)] deriving (Show,Functor)
 
--- | Consider a 'Nom'@ i o@ to be a causal transducer of 'Tape's.
-transduce :: (Sym i, Sym o) => Nom i o -> Tape i -> Tape o
-transduce n (Tape xs) = Tape (go n xs) where
-  go (Nom _) [] = []
-  go (Nom nom) ((i,isize):more) =
-    let Yex o osize k = nom i in
-    case compare osize isize of
-      LT -> (o,osize) : go (k Win) ((burn osize i, isize - osize):more)
-      EQ -> (o,osize) : go (k Tie) more
-      GT -> (o,isize) : go (k (LoseAt isize)) more
-
--- | Feedback composition. The output chunk is immediately available on 2nd input channel.
--- The resulting 'Nom' may be more or less undefined.
-feedback :: Nom (i,o) o -> Nom i o
-feedback (Nom nom) = Nom (\i -> let Yex o size k = nom (i,o) in Yex o size (feedback . k))
-
--- | To negate or eliminate (something, such as an element in a dialectic process) but
--- preserve as a partial element in a synthesis.
-sublate :: Nom i o -> Nom o i -> Void
-sublate (Nom n1) (Nom n2) =
-  let Yex o size1 k1 = n1 i
-      Yex i size2 k2 = n2 o in
-  case compare size1 size2 of
-    LT -> let n1' = k1 Win; n2' = k2 (LoseAt size1) in sublate n1' n2'
-    EQ -> let n1' = k1 Tie; n2' = k2 Tie            in sublate n1' n2'
-    GT -> let n1' = k1 (LoseAt size2); n2' = k2 Win in sublate n1' n2'
-
-ping :: Nom () (E Char)
-ping = Nom start where
-  start ~() = Yex (E (Just 'c')) 1 (waiting 1) where
-    waiting _ Win = Nom start
-    waiting _ Tie = Nom start
-    waiting timer (LoseAt t) =
-      let timer' = timer - t
-      in Nom (\() -> Yex (E Nothing) timer' (waiting timer'))
-
-term :: Nom (E Char) ()
-term = Nom (const start) where
-  start :: Yex (E Char) ()
-  start = Yex () (1/0) k
-  k :: WinLose -> Nom (E Char) ()
-  k Win = error "end of time"
-  k Tie = error "end of time"
-  k (LoseAt t) =
-    let us = floor (t * 1000000)
-        !del = unsafePerformIO (threadDelay us)
-    in Nom $ \i -> case i of
-      E Nothing  -> start
-      E (Just c) -> unsafePerformIO (putStrLn [c]) `seq` start
 
 
--- | Act like given guest 'Nom' until an event carrying a new guest arrives.
--- At the time of the event, there's no time for the old guest to react. It's replaced immediately
--- and processes the input it showed up with.
-host :: Nom i o -> Nom (E (Nom i o), i) o
-host (Nom guest) = Nom $ \(E mg, i) -> case mg of
-  Nothing           -> let Yex o size k = guest  i in Yex o size (host . k)
-  Just (Nom guest') -> let Yex o size k = guest' i in Yex o size (host . k)
-  
-
--- | The wrapped 'Nom' that would not otherwise be disturbed is only interrupted by a new
--- input fragment if it passes a test. When the test fails the original output (already in progress)
--- is used, saving on some recomputation cost.
-sentry :: Sym o => (i -> Bool) -> Nom i o -> Nom i o
-sentry p (Nom nom) = Nom openMode where
-  openMode i = let y@(Yex o size k) = nom i in Yex o size (closedMode y)
-  closedMode (Yex _ _ oldK) Win = sentry p (oldK Win)
-  closedMode (Yex _ _ oldK) Tie = sentry p (oldK Tie)
-  closedMode (Yex oldOut oldSize oldK) (LoseAt t) = Nom $ \i -> if p i
-    then
-      let Nom nom' = oldK (LoseAt t)
-          y@(Yex o size k) = nom' i
-      in Yex o size (closedMode y)
-    else
-      let o = burn t oldOut
-          size = oldSize - t
-          k = oldK . (ageLosing t)
-      in Yex o size (closedMode (Yex o size k))
-  ageLosing dt Win = Win
-  ageLosing dt Tie = Tie
-  ageLosing dt (LoseAt t) = LoseAt (t + dt)
-  
 
 
--- | A symbol contains enough information to reconstruct a finite part of a Behavior.
+
+-- | A symbol contains enough information to reconstruct a finite part of a behavior.
 -- They also serve to describe the format of a fragment stream.
 class Sym a where
 
@@ -240,6 +168,18 @@ class Sym a where
   default burn :: (Generic a, Sym' (Rep a)) => Time -> a -> a
   burn t x = to (burn' t (from x))
 
+-- | Generic products, records of symbols can be used aggregate channels.
+class Sym' f where
+  burn' :: Time -> f p -> f p
+
+instance (Sym' f) => Sym' (M1 i t f) where
+  burn' t (M1 x) = M1 (burn' t x)
+
+instance (Sym c) => Sym' (K1 i c) where
+  burn' t (K1 x) = K1 (burn t x)
+
+instance (Sym' f, Sym' g) => Sym' (f :*: g) where
+  burn' t (x :*: y) = (burn' t x :*: burn' t y)
 
 -- | A product of symbols is used to represent a multi-channel signal.
 instance (Sym a, Sym b) => Sym (a,b) where
@@ -286,15 +226,80 @@ instance Sym () where
   burn _ _ = ()
 
 
--- | Generic products, records of symbols can be used aggregate channels.
-class Sym' f where
-  burn' :: Time -> f p -> f p
 
-instance (Sym' f) => Sym' (M1 i t f) where
-  burn' t (M1 x) = M1 (burn' t x)
 
-instance (Sym c) => Sym' (K1 i c) where
-  burn' t (K1 x) = K1 (burn t x)
+-- | Consider a 'Nom'@ i o@ to be a causal transducer of 'Tape's.
+transduce :: (Sym i, Sym o) => Nom i o -> Tape i -> Tape o
+transduce n (Tape xs) = Tape (go undefined n xs) where
+  go i0 (Nom _) [] = []
+  go i0 (Nom nom) ((i1,isize):more) =
+    let Yex _ o osize k = nom i0 i1 in
+    case compare osize isize of
+      LT -> let i1' = burn osize i1 in (o,osize) : go i1' (k Win) ((i1', isize - osize):more)
+      EQ -> let i1' = burn osize i1 in (o,osize) : go i1' (k Tie) more
+      GT -> let i1' = burn isize i1 in (o,isize) : go i1' (k (LoseAt isize)) more
 
-instance (Sym' f, Sym' g) => Sym' (f :*: g) where
-  burn' t (x :*: y) = (burn' t x :*: burn' t y)
+-- | @memory x@ outputs @K x@ until an event arrives with an update.
+memory :: a -> Nom (E (a -> a)) (K a)
+memory x = Nom $ \_ i1 -> case i1 of
+  E Nothing  -> Yex (K x) (K x) (1/0) (const (memory x))
+  E (Just f) -> let x' = f x in x' `seq` Yex (K x) (K x') (1/0) (const (memory x'))
+
+
+-- | Let @t@ be the time of the first occurrence of the @E@ carrying @m@ (new @Nom@). Then
+--
+-- @
+-- ⟦host n⟧ xs = take t (⟦n⟧ (fmap snd xs)) ++ ⟦host m⟧ (drop t xs)
+-- @
+--
+-- Dynamically switch to a new 'Nom'. The old one is lost immediately and has no time to react.
+host :: Nom i o -> Nom (E (Nom i o), i) o
+host (Nom guest) = Nom $ \(_, i0) (E mg, i1) -> case mg of
+  Nothing           -> let Yex o0 o1 size k = guest i0 i1 in Yex o0 o1 size (host . k)
+  Just (Nom guest') ->
+    let Yex p0 p1 size k = guest' i0 i1
+    in Yex p0 p1 size (host . k)
+
+  
+-- | Feedback composition. There is infinitesimal delay on the 2nd input channel to guard against
+-- divergence of outputs that depend on themselves.
+feedback :: Nom (i,o) o -> Nom i o
+feedback (Nom nom) = Nom $ \i0 i1 ->
+  let Yex o0 o1 size k = nom (i0,o0) (i1,o0 {-!-}) in Yex o0 o1 size (feedback . k)
+
+{--
+
+-- | The wrapped 'Nom' that would not otherwise be disturbed is only interrupted by a new
+-- input fragment if it passes a test. When the test fails the original output (already in progress)
+-- is used, saving on some recomputation cost.
+sentry :: Sym o => (i -> Bool) -> Nom i o -> Nom i o
+sentry p (Nom nom) = Nom openMode where
+  openMode i = let y@(Yex o size k) = nom i in Yex o size (closedMode y)
+  closedMode (Yex _ _ oldK) Win = sentry p (oldK Win)
+  closedMode (Yex _ _ oldK) Tie = sentry p (oldK Tie)
+  closedMode (Yex oldOut oldSize oldK) (LoseAt t) = Nom $ \i -> if p i
+    then
+      let Nom nom' = oldK (LoseAt t)
+          y@(Yex o size k) = nom' i
+      in Yex o size (closedMode y)
+    else
+      let o = burn t oldOut
+          size = oldSize - t
+          k = oldK . (ageLosing t)
+      in Yex o size (closedMode (Yex o size k))
+  ageLosing dt Win = Win
+  ageLosing dt Tie = Tie
+  ageLosing dt (LoseAt t) = LoseAt (t + dt)
+
+(☯) :: Nom i o -> Nom o i -> a
+(!n1) ☯ (!n2) = (k1 r1) ☯ (k2 r2) where
+  Yex o !size1 k1 = n1 `nomNom` i
+  Yex i !size2 k2 = n2 `nomNom` o
+  (r1, r2) = case compare size1 size2 of
+    LT -> (Win, LoseAt size1)
+    EQ -> (Tie, Tie)
+    GT -> (LoseAt size2, Win)
+
+
+
+--}
