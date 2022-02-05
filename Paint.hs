@@ -97,6 +97,9 @@ instance (KnownSymbol name, Show t, UniType t, Uniforms ts) => Uniforms ('(name,
 class UniType a where
   setUni :: Int32 -> a -> IO ()
 
+instance UniType Float where
+  setUni i x = setUniform1f i x
+
 instance UniType Float2 where
   setUni i (F2 x y) = setUniform2f i x y
 

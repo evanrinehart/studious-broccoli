@@ -459,3 +459,39 @@ dumpableShape sh = f sh where
   f (Xform (F4 a b c d) s) = D "Xform" [F a, F b, F c, F d, f s]
   f (BGColor (C r g b) s) = D "BGColor" [F r, F g, F b, f s]
 
+
+{-
+
+-- a boolean shape, R2 -> Bool
+data ABC f where
+  Ball   :: ABC f
+  Axigon :: f Float4 -> ABC f
+  Trigon :: f Float2 -> f Float2 -> f Float2 -> ABC f
+  Curve2 :: InOut -> f Float2 -> f Float2 -> f Float2 -> ABC f
+  BoolOp :: UIM -> f (ABC f) -> f (ABC f) -> ABC f
+  Xform1 :: f Float33 -> f (ABC f) -> ABC f
+
+-- a colored cutout, R2 -> Maybe Color
+data BCD f where
+  Colorize :: f Color   -> f (ABC f) -> BCD f
+  Layer    :: f (BCD f) -> f (BCD f) -> BCD f
+  Xform2   :: f Float33 -> f (BCD f) -> BCD f
+
+-- a color picture, R2 -> Color
+data CDE f where
+  BGColor :: f Color   -> f (BCD f) -> CDE f
+  Xform3  :: f Float33 -> f (CDE f) -> CDE f
+  
+-- f = Identity, all data present
+-- f = Maybe, data is present or missing, needs to be filled in
+-- f = LC, data is there, is a variable, or a lambda expression
+
+data LC a where
+  Val :: a -> LC a
+  Lam :: String -> Scope a b -> LC (a -> b)
+  App :: LC (a -> b) -> LC a -> LC b
+  BV  :: Int -> LC a
+
+data Scope a b = Scope (LC b) -- but contains a bound var of type a
+
+-}

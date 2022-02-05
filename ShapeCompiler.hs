@@ -86,7 +86,7 @@ compileBoolOp op s1 s2 invar outvar = do
 compileShift :: Sample a => Float2 -> Sh a -> Var Float2 -> Var (GPUType a) -> Compile ()
 compileShift (F2 dx dy) sh invar outvar = do
   tmp <- copy invar
-  codeOut $ printf "%s %s = %s + vec2(%f,%f);" (tyName tmp) tmp invar dx dy
+  codeOut $ printf "%s %s = %s - vec2(%f,%f);" (tyName tmp) tmp invar dx dy
   compile sh tmp outvar
 
 compileXform :: Sample a => Float4 -> Sh a -> Var Float2 -> Var (GPUType a) -> Compile ()
@@ -227,8 +227,8 @@ toFrag sh = execCompile $ do
   codeOut "  vec4 c0, c1, c2, c3;"
   codeOut "  float dx = pixelWH.x / 4;"
   codeOut "  float dy = pixelWH.y / 4;"
-  --codeOut "  vec2 cent = vec2(0,0);"
-  codeOut "  vec2 cent = pixelWH / 2;"
+  codeOut "  vec2 cent = vec2(0,0);"
+  --codeOut "  vec2 cent = pixelWH / 2;"
   codeOut "  meat(uv + cent + vec2(-dx,dy), c0);"
   codeOut "  meat(uv + cent + vec2(dx,dy), c1);"
   codeOut "  meat(uv + cent + vec2(-dx,-dy), c2);"
@@ -238,6 +238,80 @@ toFrag sh = execCompile $ do
   codeOut "  float g = (pow(c0.g, gamma) + pow(c1.g, gamma) + pow(c2.g, gamma) + pow(c3.g, gamma)) / 4;"
   codeOut "  float b = (pow(c0.b, gamma) + pow(c1.b, gamma) + pow(c2.b, gamma) + pow(c3.b, gamma)) / 4;"
   codeOut "  outColor = vec4(pow(r, 1/gamma), pow(g, 1/gamma), pow(b, 1/gamma), 1);"
+--  codeOut "  meat(uv, c0);"
+--  codeOut "  outColor = c0;"
+  codeOut "}"
+
+toFragMask :: Sh (Maybe Color) -> String
+toFragMask sh = execCompile $ do
+  codeOut "#version 150"
+  crlf
+  codeOut "in vec2 uv;"
+  codeOut "in vec2 pixelWH;"
+  codeOut "out vec4 outColor;"
+  crlf
+  libraryOut codeForInside
+  libraryOut codeForBarycentric
+  libraryOut codeForTribox
+  libraryOut codeForBall
+  libraryOut codeForAxigon
+  libraryOut codeForTrigon
+  libraryOut (codeForCurve2 "in"  "<")
+  libraryOut (codeForCurve2 "out" ">")
+  crlf
+  codeOut "void meat(in vec2 uv, out vec4 sample){"
+  let invar  = Var "uv"
+  let outvar = Var "sample"
+  indent
+  compile sh invar outvar
+  unindent
+  codeOut "}"
+  crlf
+  codeOut "void main(){"
+  codeOut "  float dx = pixelWH.x / 8;"
+  codeOut "  float dy = pixelWH.y / 8;"
+  codeOut "  float bx = -pixelWH.x / 2 + dx;"
+  codeOut "  float by = -pixelWH.y / 2 + dy;"
+  codeOut "  vec4 c[16];"
+  codeOut "  int i, j;"
+  codeOut "  for(j=0; j<4; j++){"
+  codeOut "    for(i=0; i<4; i++){"
+  codeOut "      meat(uv + vec2(-4*dx + 2*i*dx, -4*dy + 2*j*dy), c[j*4 + i]);"
+  codeOut "    }"
+  codeOut "  }"
+
+  codeOut "  float gamma = 2.2;"
+  codeOut "  float r, g, b, a;"
+  codeOut "  float ai;"
+  codeOut "  for(i=0; i<16; i++){"
+  codeOut "    ai = c[i].a;"
+  codeOut "    r += ai * pow(c[i].r, gamma);"
+  codeOut "    g += ai * pow(c[i].g, gamma);"
+  codeOut "    b += ai * pow(c[i].b, gamma);"
+  codeOut "    a += ai;"
+  codeOut "  }"
+  codeOut "  outColor = vec4(pow(r/16, 1/gamma), pow(g/16, 1/gamma), pow(b/16, 1/gamma), a/16);"
+{-
+  codeOut "  "
+  codeOut "  vec4 c0, c1, c2, c3;"
+  codeOut "  float dx = pixelWH.x / 4;"
+  codeOut "  float dy = pixelWH.y / 4;"
+  codeOut "  vec2 cent = vec2(0,0);"
+  codeOut "  meat(uv + cent + vec2(-dx,dy), c0);"
+  codeOut "  meat(uv + cent + vec2(dx,dy), c1);"
+  codeOut "  meat(uv + cent + vec2(-dx,-dy), c2);"
+  codeOut "  meat(uv + cent + vec2(dx,-dy), c3);"
+  codeOut "  float gamma = 2.2;"
+  codeOut "  float a0 = c0.a;"
+  codeOut "  float a1 = c1.a;"
+  codeOut "  float a2 = c2.a;"
+  codeOut "  float a3 = c3.a;"
+  codeOut "  float r = (a0*pow(c0.r, gamma) + a1*pow(c1.r, gamma) + a2*pow(c2.r, gamma) + a3*pow(c3.r, gamma)) / 4;"
+  codeOut "  float g = (a0*pow(c0.g, gamma) + a1*pow(c1.g, gamma) + a2*pow(c2.g, gamma) + a3*pow(c3.g, gamma)) / 4;"
+  codeOut "  float b = (a0*pow(c0.b, gamma) + a1*pow(c1.b, gamma) + a2*pow(c2.b, gamma) + a3*pow(c3.b, gamma)) / 4;"
+  codeOut "  float a = (a0 + a1 + a2 + a3) / 4;"
+  codeOut "  outColor = vec4(pow(r, 1/gamma), pow(g, 1/gamma), pow(b, 1/gamma), a);"
+-}
   codeOut "}"
 
 libraryOut :: String -> Compile ()

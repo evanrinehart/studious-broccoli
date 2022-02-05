@@ -46,6 +46,8 @@ import Grid
 import OneShot
 import Shape
 
+import Numerals (numerals)
+
 
 -- concentrate on getting widgets to work
 -- repaint: a number of graphics resources are aquired and then needed for repainting later
@@ -367,15 +369,46 @@ main = do
 
     --blitCanvas gfx canvas (F2 0 (-240))
 
+  --let subject1 = Colorize (C 1 0 0) (Minus Ball (Xform (F4 1.333 0 0 1.333) Ball))
+  --let subject1 = Layer (Colorize (C 1 0.5 0) (Trigon (F2 0 0) (F2 0.5 1) (F2 1 0))) (Colorize (C 0 0.5 0) (Axigon (F4 -0.5 -0.5 1 1)))
+  let s1 = Minus Ball (Xform (F4 1.333 0 0 1.333) Ball)
+  let s2 = Minus (Trigon (F2 0 0) (F2 0.5 1) (F2 1 0)) (Trigon (F2 0.20225 0.125) (F2 0.5 0.72049) (F2 0.79775 0.125))
+  let f = let a = 1.107148718 in Xform (F4 (cos a) (sin a) (-(sin a)) (cos a))
+  let subject1 = Colorize (C 1 0 0) (Union s1 s2)
+
+  let stdwin = F4 -1 -1 2 2
+
+--splat :: Sh Color -> XYWH -> Float2 -> Float -> Int2 -> IO ()
   --let torch = splat (blackOnWhite Ball) (F4 -0.75 -0.75 1 1)
-  let torch0 w = splat (blackOnWhite Ball)
-                    w (F4 (-320 + 16) (240 - 16) 32 32)
+{-
+  let torch0 w = splat (blackOnWhite Ball) stdwin (F2 (-320 + 16) (240 - 16)) 32 w
   let torch1 w = splat (BGColor (C 1 1 1) (Layer (Colorize (C 1 0.5 0) (Trigon (F2 0 0) (F2 0.5 1) (F2 1 0))) (Colorize (C 0 0.5 0) (Axigon (F4 -0.5 -0.5 1 1)))))
-                    w (F4 (-320 + 3*16) (240 - 16) 32 32)
+                    stdwin (F2 (-320 + 3*16) (240 - 16)) 32 w
   let torch2 w = splat (BGColor (C 1 1 1) $ Colorize (C 0 0.5 1) (Trigon (F2 -0.5 -0.5) (F2 0 0.5) (F2 0.5 -0.5)))
-                    w (F4 (-320 + 5*16) (240 - 16) 32 32)
-  let torch3 w = splat (BGColor (C 1 1 1) $ Colorize (C 1 0 0) (Minus Ball (Xform (F4 1.25 0 0 1.25) Ball)))
-                    w (F4 (-320 + 7*16) (240 - 16) 32 32)
+                    stdwin (F2 (-320 + 5*16) (240 - 16)) 32 w 
+  let torch3 w = splat (BGColor (C 1 1 1) $ subject1)
+                    stdwin (F2 (-320 + 7*16) (240 - 16)) 32 w
+-}
+
+  let vgridlines = map (\i -> Axigon (F4 (-1 + i * 0.125) -1 (2/256) 2)) [0..16]
+  let hgridlines = map (\i -> Axigon (F4 -1 (-1 + i * 0.125) 2 (2/256))) [0..16]
+  let gridcut = Colorize (C 0.75 0.75 0.75) (foldr1 Union (hgridlines ++ vgridlines))
+  let cool = Layer (Colorize (C 0 0 0) (numerals !! 16)) gridcut
+  let torch5 x y w = splat (BGColor (C 1 1 1) cool) (F4 x y 640 480) 256 w
+--  let stencil5 x y w = splatMask (Layer (Colorize (C 1 0 0) Ball) (Shift (F2 0.5 0.5) (Colorize (C 0 1 0) Ball))) (F4 x y 640 480) 128 w
+--  let stencil5 x y w = splatMask (Colorize (C 1 0 0) Ball) (F4 x y 640 480) 128 w
+  let stencil5 x y w = splatMask subject1 (F4 x y 640 480) 128 w
+
+  let stencil7 size n i w =
+        let x = 200 * cos (2 * pi * i / 17)
+            y = 200 * sin (2 * pi * i / 17)
+        in splatMask (Colorize (C 0 0 0) (numerals !! n)) (F4 x y size size) (size / 2) w
+
+  let stencil8 size n i w =
+        let x = -size/2 - size + fromIntegral (floor (i / 4)) * size
+            y = size/2 + size - fromIntegral (floor i `mod` 4) * size
+        in splatMask (Colorize (C 0 0 0) (numerals !! n)) (F4 x y size size) (size / 2) w
+    
 
 {-
   (pic1,pic2) <- loadExample
@@ -387,10 +420,19 @@ main = do
 -}
 
   dims <- readIORef (gfxPhysicalWindowDimensions gfx)
+{-
   torch0 dims
   torch1 dims
   torch2 dims
   torch3 dims
+-}
+  clearColorBuffer 1 1 0
+  --torch5 0 0 dims
+  let ss = 64
+  forM_ [0..16] $ \i -> do
+    stencil8 ss i (fromIntegral i) dims
+
+  --torch5 0 0 dims
 
   mainLoop $ MainLoop{
     mlClock=ticker,

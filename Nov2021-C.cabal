@@ -22,7 +22,7 @@ executable Nov2021-C
                        Common, Event, Rainbow, Level, Slider, Widget, NomYex,
                        Paint, HList, Performance, Component, Film, TimeData,
                        TextCtrl, Audio, CardGame, Mailboxes, Driver2, Laser,
-                       OneShot, ShapeCompiler, Shape, Dump
+                       OneShot, ShapeCompiler, Shape, Dump, Numerals
   -- other-extensions:
   build-depends:       base < 5, GLFW-b, gl, vector, JuicyPixels, containers,
                        random, clock, mtl, comonad, vector, text, sdl2, stm,

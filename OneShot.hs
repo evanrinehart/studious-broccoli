@@ -58,7 +58,7 @@ data ImgSrc
 
 deriving instance Show ImgSrc
 
-data Option = Option deriving (Show)
+data Option = Blending Bool deriving (Show)
 
 primProxy :: Prims a -> Proxy a
 primProxy _ = Proxy
@@ -110,8 +110,13 @@ configureTheAttribs prox shader = do
 
 
 
-splat :: Sh Color -> Int2 -> XYWH -> IO ()
-splat s (Common.I2 cw ch) box = go where
+splat
+  :: Sh Color
+  -> XYWH     -- destination xy, cropping window size in screen coords
+  -> Float    -- scale factor, 1 = leave tiny
+  -> Int2     -- canvas dimensions in screen coords
+  -> IO ()
+splat s xywh scale (Common.I2 cw ch) = go where
   frag = toFrag s
   geom = TriangleFan
           (map MyVertex
@@ -119,7 +124,8 @@ splat s (Common.I2 cw ch) box = go where
             ,F2  1 -1
             ,F2  1  1
             ,F2 -1  1])
-  unis = Field @"outbox" box >:
+  unis = Field @"outScale" scale >:
+         Field @"outXYWH" xywh >:
          Field @"canvasWH" (F2 (fromIntegral cw) (fromIntegral ch)) >:
          R0
   vert =
@@ -127,20 +133,19 @@ splat s (Common.I2 cw ch) box = go where
     ["#version 150"
 
     ,"in vec2 position;"
+    ,"uniform vec4 outXYWH;" -- screen coords, 0 0 is middle of frame buffer
+    ,"uniform float outScale;" -- 1 = don't scale, but will be quite small (~ 1 pixel)
     ,"uniform vec2 canvasWH;" -- dimensions of screen in screen coords
-    ,"uniform vec4 outbox;" -- screen coords, 0 0 is middle of frame buffer
     ,"out vec2 uv;"
     ,"out vec2 pixelWH;" -- in uv coords, pixels should always fit nicely in the outbox
 
     ,"void main(){"
-    ,"  float w = outbox.z;"
-    ,"  float h = outbox.w;"
-    ,"  float x = outbox.x;"
-    ,"  float y = outbox.y;"
-    ,"  float sw = canvasWH.x;"
-    ,"  float sh = canvasWH.y;"
-    ,"  pixelWH = vec2(2 / w, 2 / h);"
-    ,"  uv = position;"
+    ,"  float x = outXYWH.x;"
+    ,"  float y = outXYWH.y;"
+    ,"  float w = outXYWH.z;"
+    ,"  float h = outXYWH.w;"
+    ,"  pixelWH = vec2(1/outScale,1/outScale);"
+    ,"  uv = position * vec2(w/2, h/2) / outScale;"
     ,"  vec2 xy = position * vec2(w,h)/canvasWH + 2*vec2(x,y)/canvasWH;"
     ,"  gl_Position = vec4(xy, 0, 1);"
     ,"}"
@@ -151,11 +156,66 @@ splat s (Common.I2 cw ch) box = go where
       oneGeom = geom,
       oneUnis = unis,
       oneImag = [],
-      oneOpts = mempty,
+      oneOpts = [Blending False],
       oneProg = ProgSrc vert frag
     }
 
-  alertMsg = "no samplers expected when splatting a shape"
+  alertMsg = "no samplers expected when splatting a color picture"
+
+  go = renderOneShot (const (error alertMsg)) shot
+
+-- *** RESUME WORK HERE, NEED ALPHA BLENDING OPTION FOR OneShot ***
+splatMask
+  :: Sh (Maybe Color)
+  -> XYWH     -- destination xy, cropping window size in screen coords
+  -> Float    -- scale factor, 1 = leave tiny
+  -> Int2     -- canvas dimensions in screen coords
+  -> IO ()
+splatMask s xywh scale (Common.I2 cw ch) = go where
+  frag = toFragMask s
+  geom = TriangleFan
+          (map MyVertex
+            [F2 -1 -1
+            ,F2  1 -1
+            ,F2  1  1
+            ,F2 -1  1])
+  unis = Field @"outScale" scale >:
+         Field @"outXYWH" xywh >:
+         Field @"canvasWH" (F2 (fromIntegral cw) (fromIntegral ch)) >:
+         R0
+  vert =
+    (unlines
+    ["#version 150"
+
+    ,"in vec2 position;"
+    ,"uniform vec4 outXYWH;" -- screen coords, 0 0 is middle of frame buffer
+    ,"uniform float outScale;" -- 1 = don't scale, but will be quite small (~ 1 pixel)
+    ,"uniform vec2 canvasWH;" -- dimensions of screen in screen coords
+    ,"out vec2 uv;"
+    ,"out vec2 pixelWH;" -- in uv coords, pixels should always fit nicely in the outbox
+
+    ,"void main(){"
+    ,"  float x = outXYWH.x;"
+    ,"  float y = outXYWH.y;"
+    ,"  float w = outXYWH.z;"
+    ,"  float h = outXYWH.w;"
+    ,"  pixelWH = vec2(1/outScale,1/outScale);"
+    ,"  uv = position * vec2(w/2, h/2) / outScale;"
+    ,"  vec2 xy = position * vec2(w,h)/canvasWH + 2*vec2(x,y)/canvasWH;"
+    ,"  gl_Position = vec4(xy, 0, 1);"
+    ,"}"
+    ])
+
+  shot = 
+    OneShot {
+      oneGeom = geom,
+      oneUnis = unis,
+      oneImag = [],
+      oneOpts = [Blending True],
+      oneProg = ProgSrc vert frag
+    }
+
+  alertMsg = "no samplers expected when splatting a color picture"
 
   go = renderOneShot (const (error alertMsg)) shot
   
@@ -176,7 +236,7 @@ renderOneShot
   => (String -> DynamicImage)
   -> OneShot a u
   -> IO ()
-renderOneShot imglib (OneShot geo teximgs _ (ProgSrc vsrc fsrc) univals) = do
+renderOneShot imglib (OneShot geo teximgs opts (ProgSrc vsrc fsrc) univals) = do
 
   -- Gather any images
   imgs <- forM teximgs $ \(TexImage ti _) -> case ti of
@@ -211,6 +271,13 @@ renderOneShot imglib (OneShot geo teximgs _ (ProgSrc vsrc fsrc) univals) = do
 
   -- Set all the uniforms
   setUniforms uniformLocs univals shader
+
+  forM_ opts $ \o -> case o of
+    Blending True -> do
+      glBlendFunc GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA
+      glEnable GL_BLEND
+    Blending False -> do
+      glDisable GL_BLEND
 
   -- Render command
   --glViewport 0 0 10 10

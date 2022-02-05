@@ -240,6 +240,9 @@ getUniformLocation (Shader pr) name =
 setUniform1i :: GLint -> Int32 -> IO ()
 setUniform1i ul i = glUniform1i ul i
 
+setUniform1f :: GLint -> Float -> IO ()
+setUniform1f ul x = glUniform1f ul x
+
 setUniform2f :: GLint -> Float -> Float -> IO ()
 setUniform2f ul x y =
   withArray [x,y] $ \ptr -> glUniform2fv ul 1 ptr
