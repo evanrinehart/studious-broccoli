@@ -432,3 +432,24 @@ example imgs = OneShot
 
 
 
+
+
+-- listing of the steps in a "one shot" 
+-- * construct a (raw) shape using haskell program
+-- * compile shape as a fragment shader, which is basically a pretty printer
+-- * issue command to compile shader code (and use it)
+-- * issue command to upload vector of geometric data
+-- * issue command to upload images to sample (none in this case)
+-- * issue command to set uniforms
+-- * issue command to set rendering options
+-- * issue command to render graphics onto framebuffer
+-- * issue command to delete (textures, vbo, shader, and vao)
+
+-- How to be more efficient with repeated graphics
+-- * save (don't delete) the vao, shader, vbo, texture handles, and uniform locations
+-- * when rendering again, just set uniforms and issue rendering commands
+
+-- How to be even more efficient with less flexibility
+-- * Render an image to a texture palette.
+-- * With a separate brush, paste a simple textured quad sourced from the palette
+-- * Save the palette, fbo, and pieces for the paster brush

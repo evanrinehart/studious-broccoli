@@ -14,6 +14,8 @@ import Data.Foldable
 import Data.Char
 import Data.Maybe
 
+import System.Random
+
 import Control.Exception
 import Control.Concurrent
 import Control.Monad.Writer
@@ -23,6 +25,8 @@ import qualified Data.Map as M; import Data.Map (Map)
 
 import qualified Graphics.UI.GLFW as GLFW
 --import Graphics.GL
+
+import qualified Data.Vector as V
 
 import Codec.Picture as JuicyPixels
 
@@ -46,7 +50,7 @@ import Grid
 import OneShot
 import Shape
 
-import Numerals (numerals)
+import Numerals (numerals, fractional, displayInt, displayFloat)
 
 
 -- concentrate on getting widgets to work
@@ -393,8 +397,8 @@ main = do
   let vgridlines = map (\i -> Axigon (F4 (-1 + i * 0.125) -1 (2/256) 2)) [0..16]
   let hgridlines = map (\i -> Axigon (F4 -1 (-1 + i * 0.125) 2 (2/256))) [0..16]
   let gridcut = Colorize (C 0.75 0.75 0.75) (foldr1 Union (hgridlines ++ vgridlines))
-  let cool = Layer (Colorize (C 0 0 0) (numerals !! 16)) gridcut
-  let torch5 x y w = splat (BGColor (C 1 1 1) cool) (F4 x y 640 480) 256 w
+  let cool = Layer (Colorize (C 0 0 0) (numerals !! 5)) gridcut
+  let torch5 x y w = splat (BGColor (C 1 1 1) cool) (F4 x y 640 480) 128 w
 --  let stencil5 x y w = splatMask (Layer (Colorize (C 1 0 0) Ball) (Shift (F2 0.5 0.5) (Colorize (C 0 1 0) Ball))) (F4 x y 640 480) 128 w
 --  let stencil5 x y w = splatMask (Colorize (C 1 0 0) Ball) (F4 x y 640 480) 128 w
   let stencil5 x y w = splatMask subject1 (F4 x y 640 480) 128 w
@@ -409,6 +413,25 @@ main = do
             y = size/2 + size - fromIntegral (floor i `mod` 4) * size
         in splatMask (Colorize (C 0 0 0) (numerals !! n)) (F4 x y size size) (size / 2) w
     
+  let stencil9 size n i j w =
+        let x = -logicalW/2 + size/2 + i * size
+            y =  logicalH/2 - size/2 - j * size
+        in splatMask (Colorize (C 0 1 0) (numerals !! n)) (F4 x y size size) (size / 2) w
+
+  let stencil10 size r i w =
+        let x = -size/2 - size + fromIntegral (floor (i / 4)) * size
+            y = size/2 + size - fromIntegral (floor i `mod` 4) * size
+        in splatMask (Colorize (C 0 0 0) (fractional r)) (F4 x y size size) (size / 2) w
+
+  let stencil11 size s i j w =
+        let x = -logicalW/2 + size/2 + i * size
+            y =  logicalH/2 - size/2 - j * size
+        in splatMask (Colorize (C 0 0 0) s) (F4 x y size size) (size / 2) w
+
+  let stencil12 size s i j w =
+        let x = -logicalW/2 + size/4 + i * size / 2
+            y =  logicalH/2 - size/2 - j * size
+        in splatMask (Colorize (C 0 0 0) (Xform (F4 2 0 0 1) s)) (F4 x y (size/2) size) (size / 2) w
 
 {-
   (pic1,pic2) <- loadExample
@@ -426,11 +449,22 @@ main = do
   torch2 dims
   torch3 dims
 -}
-  clearColorBuffer 1 1 0
+  clearColorBuffer 0.9 0.9 0.9
   --torch5 0 0 dims
-  let ss = 64
-  forM_ [0..16] $ \i -> do
-    stencil8 ss i (fromIntegral i) dims
+
+  let gr = V.replicate 15 (V.replicate 25 (numerals !! 15))
+  
+  forM_ [0..24] $ \i -> do
+    --stencil8 30 i (fromIntegral i) dims
+    --stencil7 48 i (fromIntegral i) dims
+    forM_ [0..14] $ \j -> do
+      --let ii = (i + floor j) `mod` 17
+      --n <- randomRIO (0,15)
+      stencil11 32 (gr V.! j V.! i) (fi i) (fi j) dims
+
+  --n <- randomRIO (0,65535)
+  --forM_ (zip (displayInt n 16) [0..]) $ \(s,i) -> do
+    --stencil11 30 s i 0 dims
 
   --torch5 0 0 dims
 
@@ -445,9 +479,12 @@ main = do
 --      ws <- readIORef widgetsV
 --      forM_ ws (repaintWidget gfx . snd)
 --      forM_ (reverse ws) (blitWidget gfx . snd)
---        clearColorBuffer 1 1 0
+        --clearColorBuffer 1 1 0
         --renderOneShot imglib shot
         
+        --forM_ [0..16] $ \i -> do
+          --stencil7 48 i (fromIntegral i) dims
+          --stencil8 ss i (fromIntegral i) dims
         GLFW.swapBuffers win
         return ()
       ,
@@ -546,7 +583,7 @@ globalMouseTranslator win ua@UserActions{uaMouse=orig} = ua{uaMouse=g} where
     --print ((x,y),(x',y'))
     orig x' y'
 
-logicalW = 640
+logicalW = 800
 logicalH = 480
 
 
